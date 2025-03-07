@@ -15,19 +15,25 @@ from PyQt6.QtGui import QColor
 class SerialReader(QThread):
     data_received = pyqtSignal(list)
 
-    def __init__(self, channels=4, ch1_amplitude=2.5):
+    def __init__(self, channels=4, ch1_amplitude=2.5, mode='AC'):
         super().__init__()
         self.channels = channels
         self.running = False
-        self.sample_rate = 100  # Increased from 20 to 100 for smoother waveform
+        self.sample_rate = 200  # Increased sample rate for smoother waveform
         self.time_step = 0.0
         self.ch1_amplitude = ch1_amplitude
+        self.mode = mode  # 'AC' for regular sine wave, 'DC' for full-wave rectified sine wave
 
     def run(self):
         self.running = True
         while self.running:
             dummy_data = []
-            ch1_value = abs(np.sin(2 * np.pi * 1 * self.time_step))
+            if self.mode == 'AC':
+                # Generate a regular sine wave
+                ch1_value = np.sin(2 * np.pi * 5 * self.time_step)  # 5 Hz frequency
+            elif self.mode == 'DC':
+                # Generate a full-wave rectified sine wave
+                ch1_value = np.abs(np.sin(2 * np.pi * 5 * self.time_step))  # 5 Hz frequency
             dummy_data.append(ch1_value * self.ch1_amplitude)
             for _ in range(self.channels - 1):
                 dummy_data.append(np.random.random())
@@ -42,6 +48,9 @@ class SerialReader(QThread):
 
     def set_ch1_amplitude(self, amplitude):
         self.ch1_amplitude = amplitude
+
+    def set_mode(self, mode):
+        self.mode = mode
 
 class PlotWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -171,7 +180,7 @@ class OscilloscopeApp(QMainWindow):
             QPushButton#auto_set_button { background-color: #FF5722; }
             QPushButton#default_button { background-color: #9E9E9E; }
             QPushButton#save_button { background-color: #388E3C; }
-            QPushButton#record_button {background-color:#90bf43; }
+            QPushButton#record_button { background-color: #90bf43; }
             QTabWidget {
                 background-color: #121212;
             }
@@ -436,6 +445,16 @@ class OscilloscopeApp(QMainWindow):
         ch1_amplitude_layout.addWidget(self.ch1_amplitude_spinbox)
         control_layout.addLayout(ch1_amplitude_layout)
 
+        # Add mode selection
+        mode_layout = QHBoxLayout()
+        mode_label = QLabel("Mode:")
+        mode_layout.addWidget(mode_label)
+        self.mode_selector = QComboBox()
+        self.mode_selector.addItems(["AC", "DC"])
+        self.mode_selector.currentTextChanged.connect(self.update_mode)
+        mode_layout.addWidget(self.mode_selector)
+        control_layout.addLayout(mode_layout)
+
         control_layout.addStretch()
         scroll.setWidget(control_widget)
         main_layout.addWidget(scroll)
@@ -500,6 +519,41 @@ class OscilloscopeApp(QMainWindow):
     def auto_set(self):
         pass
 
+    def calculate_frequency(self, data):
+        if len(data) < 2:
+            print("Not enough data points to calculate frequency.")
+            return None
+
+        data = np.array(data)  # Convert data to a NumPy array
+
+        # Detect if the waveform is pulsating DC (full-wave rectified) or AC
+        if np.all(data >= 0):
+            # Full-wave rectified (pulsating DC)
+            peaks = np.where((data[1:-1] > data[:-2]) & (data[1:-1] > data[2:]))[0] + 1
+            print(f"Peaks: {peaks}")
+            if len(peaks) < 2:
+                print("Not enough peaks to calculate frequency.")
+                return None
+            period_samples = np.diff(peaks)
+        else:
+            # AC waveform
+            zero_crossings = np.where(np.diff(np.sign(data)))[0]
+            print(f"Zero crossings: {zero_crossings}")
+            if len(zero_crossings) < 2:
+                print("Not enough zero crossings to calculate frequency.")
+                return None
+            period_samples = np.diff(zero_crossings)
+
+        print(f"Period samples: {period_samples}")
+        avg_period_samples = np.mean(period_samples)
+        print(f"Average period in samples: {avg_period_samples}")
+        frequency = self.sample_rate / avg_period_samples
+        print(f"Calculated frequency: {frequency}")
+        return frequency
+
+    def calculate_rms(self, data):
+        return np.sqrt(np.mean(np.square(data)))
+
     def default_setup(self):
         self.time_div_spinbox.setValue(1)
         self.volt_div_spinbox.setValue(1)
@@ -543,9 +597,20 @@ class OscilloscopeApp(QMainWindow):
                                          self.display_window, self.sample_rate, self.channel_positions, 
                                          self.horizontal_position)
 
+            # Calculate and update frequency and RMS voltage
+            if self.channel_active[0] and self.data_buffer[0]:
+                frequency = self.calculate_frequency(self.data_buffer[0])
+                rms_voltage = self.calculate_rms(self.data_buffer[0])
+                self.measure_freq.setText(f"Frequency: {frequency:.2f} Hz" if frequency else "Frequency: N/A")
+                self.measure_rms.setText(f"RMS Voltage: {rms_voltage:.2f} V")
+            else:
+                self.measure_freq.setText("Frequency: N/A")
+                self.measure_rms.setText("RMS Voltage: N/A")
+
     def start_acquisition(self):
         if not self.serial_thread:
-            self.serial_thread = SerialReader(channels=4, ch1_amplitude=self.ch1_amplitude)
+            mode = self.mode_selector.currentText()
+            self.serial_thread = SerialReader(channels=4, ch1_amplitude=self.ch1_amplitude, mode=mode)
             self.serial_thread.data_received.connect(self.process_data)
             self.serial_thread.start()
             self.is_running = True
@@ -652,6 +717,10 @@ class OscilloscopeApp(QMainWindow):
                 pass
             except Exception:
                 pass
+
+    def update_mode(self, mode):
+        if self.serial_thread:
+            self.serial_thread.set_mode(mode)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
