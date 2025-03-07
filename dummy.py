@@ -67,7 +67,7 @@ class PlotWindow(QMainWindow):
         colors = ['#FF0000', '#00FF00', '#33CCFF', '#FFFF00']
         self.traces = [self.plot_widget.plot([], [], pen=pg.mkPen(color=color, width=2)) for color in colors]
 
-    def update_plot(self, data_buffer, channel_active, time_div, voltage_div, display_window, sample_rate, channel_positions, horizontal_position):
+    def update_plot(self, data_buffer, channel_active, time_div, voltage_div, display_window, sample_rate, channel_positions, horizontal_position, probe_attenuation):
         sample_duration_ms = 1000 / sample_rate  
         display_window_ms = time_div * 100
 
@@ -76,7 +76,7 @@ class PlotWindow(QMainWindow):
                 num_points = min(len(data_buffer[i]), display_window)
                 x_values = np.linspace(0, display_window_ms, num_points)
                 x_values += horizontal_position * sample_duration_ms
-                y_values = np.array(data_buffer[i][-num_points:]) * voltage_div + channel_positions[i]
+                y_values = np.array(data_buffer[i][-num_points:]) * voltage_div * probe_attenuation + channel_positions[i]
                 trace.setData(x_values, y_values)
             else:
                 trace.setData([], [])
@@ -99,7 +99,9 @@ class OscilloscopeApp(QMainWindow):
         self.horizontal_position = 0
         self.is_running = False
         self.plot_window = None
-        self.ch1_amplitude = 2.5
+        self.ch1_amplitude = 2.5  # Default amplitude
+        self.probe_attenuation = 1.0  # Default to 1x attenuation
+        self.impedance = 1e6  # Default to 1 MΩ impedance
         self.initUI()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plot)
@@ -374,9 +376,11 @@ class OscilloscopeApp(QMainWindow):
         input_layout = QFormLayout()
         self.probe_attenuation_combo = QComboBox()
         self.probe_attenuation_combo.addItems(["1x", "10x"])
+        self.probe_attenuation_combo.currentIndexChanged.connect(self.update_probe_attenuation)
         input_layout.addRow("Probe Attenuation:", self.probe_attenuation_combo)
         self.impedance_combo = QComboBox()
         self.impedance_combo.addItems(["1 MΩ", "50 Ω"])
+        self.impedance_combo.currentIndexChanged.connect(self.update_impedance)
         input_layout.addRow("Impedance:", self.impedance_combo)
         input_group.setLayout(input_layout)
         control_layout.addWidget(input_group)
@@ -514,7 +518,7 @@ class OscilloscopeApp(QMainWindow):
                 self.plot_window.update_plot(self.data_buffer, self.channel_active, 
                                             self.time_div_spinbox.value(), self.volt_div_spinbox.value(),
                                             self.display_window, self.sample_rate, 
-                                            self.channel_positions, self.horizontal_position)
+                                            self.channel_positions, self.horizontal_position, self.probe_attenuation)
 
     def auto_set(self):
         pass
@@ -595,12 +599,14 @@ class OscilloscopeApp(QMainWindow):
 
             self.plot_window.update_plot(self.data_buffer, self.channel_active, time_div, voltage_div, 
                                          self.display_window, self.sample_rate, self.channel_positions, 
-                                         self.horizontal_position)
+                                         self.horizontal_position, self.probe_attenuation)
 
             # Calculate and update frequency and RMS voltage
             if self.channel_active[0] and self.data_buffer[0]:
-                frequency = self.calculate_frequency(self.data_buffer[0])
-                rms_voltage = self.calculate_rms(self.data_buffer[0])
+                # Apply probe attenuation to the data
+                attenuated_data = [value * self.probe_attenuation for value in self.data_buffer[0]]
+                frequency = self.calculate_frequency(attenuated_data)
+                rms_voltage = self.calculate_rms(attenuated_data)
                 self.measure_freq.setText(f"Frequency: {frequency:.2f} Hz" if frequency else "Frequency: N/A")
                 self.measure_rms.setText(f"RMS Voltage: {rms_voltage:.2f} V")
             else:
@@ -627,7 +633,7 @@ class OscilloscopeApp(QMainWindow):
             self.plot_window.update_plot(self.data_buffer, self.channel_active, 
                                         self.time_div_spinbox.value(), self.volt_div_spinbox.value(),
                                         self.display_window, self.sample_rate, 
-                                        self.channel_positions, self.horizontal_position)
+                                        self.channel_positions, self.horizontal_position, self.probe_attenuation)
 
     def process_data(self, data):
         for i in range(min(len(data), len(self.data_buffer))):
@@ -721,6 +727,30 @@ class OscilloscopeApp(QMainWindow):
     def update_mode(self, mode):
         if self.serial_thread:
             self.serial_thread.set_mode(mode)
+
+    def update_probe_attenuation(self, index):
+        attenuation_str = self.probe_attenuation_combo.currentText()
+        if attenuation_str == "1x":
+            self.probe_attenuation = 1.0
+        elif attenuation_str == "10x":
+            self.probe_attenuation = 10.0
+        # Apply changes to the data if necessary
+        self.update_data()
+        self.update_plot()
+
+    def update_impedance(self, index):
+        impedance_str = self.impedance_combo.currentText()
+        if impedance_str == "1 MΩ":
+            self.impedance = 1e6  # 1 MΩ in ohms
+        elif impedance_str == "50 Ω":
+            self.impedance = 50.0
+        # Apply changes to the data if necessary
+        self.update_data()
+        self.update_plot()
+
+    def update_data(self):
+        # Implement any necessary data updates based on the new settings
+        pass
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
