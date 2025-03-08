@@ -15,7 +15,7 @@ from PyQt6.QtGui import QColor
 class SerialReader(QThread):
     data_received = pyqtSignal(list)
 
-    def __init__(self, channels=4, ch1_amplitude=2.5, mode='AC'):
+    def __init__(self, channels=4, ch1_amplitude=2.5, mode='AC', impedance=1e6):
         super().__init__()
         self.channels = channels
         self.running = False
@@ -23,6 +23,7 @@ class SerialReader(QThread):
         self.time_step = 0.0
         self.ch1_amplitude = ch1_amplitude
         self.mode = mode  # 'AC' for regular sine wave, 'DC' for full-wave rectified sine wave
+        self.impedance = impedance  # ohms
 
     def run(self):
         self.running = True
@@ -34,7 +35,16 @@ class SerialReader(QThread):
             elif self.mode == 'DC':
                 # Generate a full-wave rectified sine wave
                 ch1_value = np.abs(np.sin(2 * np.pi * 5 * self.time_step))  # 5 Hz frequency
+
+            # Simulate impedance effect if impedance is not infinite (very high resistance)
+            if self.impedance < float('inf'):
+                # Simple model: assume signal is attenuated by the impedance if low.
+                # This is a very basic model and doesn't reflect the full complexity of impedance effects.
+                if self.impedance < 1e6:  # Example: consider it low when below 1 MΩ
+                    attenuation_factor = self.impedance / 1e6  # Attenuate more as impedance decreases
+                    ch1_value *= attenuation_factor
             dummy_data.append(ch1_value * self.ch1_amplitude)
+
             for _ in range(self.channels - 1):
                 dummy_data.append(np.random.random())
             self.data_received.emit(dummy_data)
@@ -51,6 +61,9 @@ class SerialReader(QThread):
 
     def set_mode(self, mode):
         self.mode = mode
+
+    def set_impedance(self, impedance):
+        self.impedance = impedance
 
 class PlotWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -604,7 +617,7 @@ class OscilloscopeApp(QMainWindow):
             # Calculate and update frequency and RMS voltage
             if self.channel_active[0] and self.data_buffer[0]:
                 # Apply probe attenuation to the data
-                attenuated_data = [value * self.probe_attenuation for value in self.data_buffer[0]]
+                attenuated_data = [value / self.probe_attenuation for value in self.data_buffer[0]]
                 frequency = self.calculate_frequency(attenuated_data)
                 rms_voltage = self.calculate_rms(attenuated_data)
                 self.measure_freq.setText(f"Frequency: {frequency:.2f} Hz" if frequency else "Frequency: N/A")
@@ -616,7 +629,7 @@ class OscilloscopeApp(QMainWindow):
     def start_acquisition(self):
         if not self.serial_thread:
             mode = self.mode_selector.currentText()
-            self.serial_thread = SerialReader(channels=4, ch1_amplitude=self.ch1_amplitude, mode=mode)
+            self.serial_thread = SerialReader(channels=4, ch1_amplitude=self.ch1_amplitude, mode=mode, impedance=self.impedance)
             self.serial_thread.data_received.connect(self.process_data)
             self.serial_thread.start()
             self.is_running = True
@@ -744,7 +757,12 @@ class OscilloscopeApp(QMainWindow):
             self.impedance = 1e6  # 1 MΩ in ohms
         elif impedance_str == "50 Ω":
             self.impedance = 50.0
-        # Apply changes to the data if necessary
+
+        # Update the serial thread if it's running
+        if self.serial_thread:
+            self.serial_thread.set_impedance(self.impedance)
+
+        # Apply changes to the displayed data
         self.update_data()
         self.update_plot()
 
