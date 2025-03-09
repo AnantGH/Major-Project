@@ -17,12 +17,15 @@ from PyQt6.QtGui import QColor
 class SerialReader(QThread):
     data_received = pyqtSignal(list)
 
-    def __init__(self, port, baudrate, channels=4):
+    def __init__(self, port, baudrate, channels=4, ch1_amplitude=2.5, mode='AC', impedance=1e6):
         super().__init__()
         self.channels = channels
         self.running = False
         self.port = port
         self.baudrate = baudrate
+        self.ch1_amplitude = ch1_amplitude
+        self.mode = mode
+        self.impedance = impedance
         try:
             self.ser = serial.Serial(port, baudrate)
             print(f"Connected to serial port: {port} at {baudrate} baud")
@@ -37,18 +40,20 @@ class SerialReader(QThread):
             while self.running:
                 try:
                     if self.ser.in_waiting > 0:
-                        # Read and parse data from serial (adjust based on your hardware's output format)
                         serial_data = self.ser.readline().decode('utf-8').strip()
-                        # Assuming data is comma-separated, like "1.23,2.34,3.45,4.56"
                         try:
                             data = [float(val) for val in serial_data.split(',')]
+                            # Simulate impedance effect if impedance is not infinite (very high resistance)
+                            if self.impedance < float('inf'):
+                                if self.impedance < 1e6:  # Example: consider it low when below 1 MΩ
+                                    attenuation_factor = self.impedance / 1e6  # Attenuate more as impedance decreases
+                                    data[0] *= attenuation_factor
                             self.data_received.emit(data)
                         except ValueError:
                             print(f"Invalid data received: {serial_data}")
                 except serial.SerialException as e:
                     print(f"Serial read error: {e}")
                     self.running = False
-                # No need for artificial sleep, serial read will handle timing
 
     def stop(self):
         self.running = False
@@ -59,13 +64,16 @@ class SerialReader(QThread):
 
     def set_ch1_amplitude(self, amplitude):
         self.ch1_amplitude = amplitude
-        if not self.use_dummy and self.serial and self.serial.is_open:
+        if self.ser and self.ser.is_open:
             try:
-                command = f"CH1AMP,{amplitude:.1f}\n"  # Customize based on hardware protocol
-                self.serial.write(command.encode('utf-8'))
+                command = f"CH1AMP,{amplitude:.1f}\n"
+                self.ser.write(command.encode('utf-8'))
                 print(f"Set CH1 amplitude to {amplitude}V")
             except serial.SerialException as e:
                 print(f"Error setting CH1 amplitude: {e}")
+
+    def set_impedance(self, impedance):
+        self.impedance = impedance
 
 class PlotWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -82,36 +90,41 @@ class PlotWindow(QMainWindow):
         colors = ['#FF0000', '#00FF00', '#33CCFF', '#FFFF00']
         self.traces = [self.plot_widget.plot([], [], pen=pg.mkPen(color=color, width=2)) for color in colors]
 
-    def update_plot(self, data_buffer, channel_active, time_div, voltage_div, display_window, sample_rate, channel_positions, horizontal_position):
+    def update_plot(self, data_buffer, channel_active, time_div, voltage_div, display_window, sample_rate, channel_positions, horizontal_position, probe_attenuation):
+        sample_duration_ms = 1000 / sample_rate  
+        display_window_ms = time_div * 100
+
         for i, trace in enumerate(self.traces):
             if channel_active[i] and data_buffer[i]:
                 num_points = min(len(data_buffer[i]), display_window)
-                x_values = np.linspace(0, num_points * (1000 / sample_rate) / (time_div * 10), num_points)
-                x_values += horizontal_position * (1000 / sample_rate) / (time_div * 10)
-                y_values = np.array(data_buffer[i][-num_points:]) * voltage_div + channel_positions[i]
+                x_values = np.linspace(0, display_window_ms, num_points)
+                x_values += horizontal_position * sample_duration_ms
+                y_values = np.array(data_buffer[i][-num_points:]) * voltage_div / probe_attenuation + channel_positions[i]
                 trace.setData(x_values, y_values)
             else:
                 trace.setData([], [])
-        self.plot_widget.setXRange(horizontal_position * (1000 / sample_rate) / (time_div * 10),
-                                   horizontal_position * (1000 / sample_rate) / (time_div * 10) + 
-                                   display_window * (1000 / sample_rate) / (time_div * 10))
+
+        self.plot_widget.setXRange(horizontal_position * sample_duration_ms,
+                                   horizontal_position * sample_duration_ms + display_window_ms)
 
 class OscilloscopeApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Digital Oscilloscope")
         self.setGeometry(100, 100, 1200, 800)
-
         self.data_buffer = [[] for _ in range(4)]
-        self.max_samples = 200
-        self.display_window = 100
-        self.sample_rate = 20
+        self.max_samples = 500
+        self.display_window = 500
+        self.sample_rate = 100
         self.serial_thread = None
         self.channel_active = [True, True, True, True]
         self.channel_positions = [0, 0, 0, 0]
         self.horizontal_position = 0
         self.is_running = False
         self.plot_window = None
+        self.ch1_amplitude = 2.5
+        self.probe_attenuation = 1.0
+        self.impedance = 1e6
         self.initUI()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plot)
@@ -316,9 +329,11 @@ class OscilloscopeApp(QMainWindow):
         input_layout = QFormLayout()
         self.probe_attenuation_combo = QComboBox()
         self.probe_attenuation_combo.addItems(["1x", "10x"])
+        self.probe_attenuation_combo.currentIndexChanged.connect(self.update_probe_attenuation)
         input_layout.addRow("Probe Attenuation:", self.probe_attenuation_combo)
         self.impedance_combo = QComboBox()
         self.impedance_combo.addItems(["1 MΩ", "50 Ω"])
+        self.impedance_combo.currentIndexChanged.connect(self.update_impedance)
         input_layout.addRow("Impedance:", self.impedance_combo)
         input_group.setLayout(input_layout)
         self.main_layout.addWidget(input_group)
@@ -360,15 +375,12 @@ class OscilloscopeApp(QMainWindow):
         self.save_button.setStyleSheet("background-color: #388E3C; color: white; padding: 10px;")
         self.save_button.clicked.connect(self.save_data)
         utility_layout.addWidget(self.save_button)
-        utility_group.setLayout(utility_layout)
-        control_layout.addWidget(utility_group)
         self.record_button = QPushButton("Record Waveform")
         self.record_button.setStyleSheet("background-color: #90bf43; color: white; padding: 10px;")
         self.record_button.clicked.connect(self.record_data)
         utility_layout.addWidget(self.record_button)
         utility_group.setLayout(utility_layout)
-        control_layout.addWidget(utility_group)
-
+        self.main_layout.addWidget(utility_group)
 
         # Channel Controls
         channel_controls_layout = QHBoxLayout()
@@ -398,37 +410,37 @@ class OscilloscopeApp(QMainWindow):
         self.com_port_selector.addItems(ports if ports else ["No Ports Found"])
 
     def update_plot(self):
-        if not self.plot_window:
-            return
+        if self.plot_window:
+            time_div = self.time_div_spinbox.value()
+            voltage_div = self.volt_div_spinbox.value()
+            raw_trigger_level = self.trigger_spinbox.value() / 1000
+            trigger_source = self.trigger_source_combo.currentIndex()
+            trigger_slope = self.trigger_slope_combo.currentText()
+            trigger_mode = self.trigger_mode_combo.currentText()
 
-        time_div = self.time_div_spinbox.value()
-        voltage_div = self.volt_div_spinbox.value()
-        trigger_level = self.trigger_spinbox.value()
-        trigger_source = self.trigger_source_combo.currentIndex()
-        trigger_slope = self.trigger_slope_combo.currentText()
+            triggered = False
+            if self.is_running:
+                for i, buffer in enumerate(self.data_buffer):
+                    if i == trigger_source and buffer and self.channel_active[i]:
+                        last_val = buffer[-2] if len(buffer) > 1 else buffer[-1]
+                        curr_val = buffer[-1]
+                        if (trigger_slope == "Rising" and last_val < raw_trigger_level <= curr_val) or \
+                           (trigger_slope == "Falling" and last_val > raw_trigger_level >= curr_val):
+                            triggered = True
+                            break
 
-        triggered = False
-        if self.is_running and self.trigger_mode_combo.currentText() == "Normal":
-            for i, buffer in enumerate(self.data_buffer):
-                if i == trigger_source and buffer and self.channel_active[i]:
-                    last_val = buffer[-2] if len(buffer) > 1 else buffer[-1]
-                    curr_val = buffer[-1]
-                    if (trigger_slope == "Rising" and last_val < trigger_level <= curr_val) or \
-                       (trigger_slope == "Falling" and last_val > trigger_level >= curr_val):
-                        triggered = True
-                        break
-            if not triggered:
+            if trigger_mode == "Normal" and not triggered:
                 return
 
-        self.plot_window.update_plot(self.data_buffer, self.channel_active, time_div, voltage_div, 
-                                     self.display_window, self.sample_rate, self.channel_positions, 
-                                     self.horizontal_position)
+            self.plot_window.update_plot(self.data_buffer, self.channel_active, time_div, voltage_div, 
+                                         self.display_window, self.sample_rate, self.channel_positions, 
+                                         self.horizontal_position, self.probe_attenuation)
 
-        if self.data_buffer[0]:
-            freq = self.calculate_frequency(self.data_buffer[0])
-            rms = np.sqrt(np.mean(np.square(self.data_buffer[0][-self.display_window:])))
-            self.measure_freq.setText(f"Frequency: {freq:.2f} Hz")
-            self.measure_rms.setText(f"RMS Voltage: {rms:.2f} V")
+            if self.data_buffer[0]:
+                freq = self.calculate_frequency(self.data_buffer[0])
+                rms = np.sqrt(np.mean(np.square(self.data_buffer[0][-self.display_window:])))
+                self.measure_freq.setText(f"Frequency: {freq:.2f} Hz")
+                self.measure_rms.setText(f"RMS Voltage: {rms:.2f} V")
 
     def calculate_frequency(self, buffer):
         if len(buffer) < 2:
@@ -443,7 +455,8 @@ class OscilloscopeApp(QMainWindow):
         if not self.serial_thread:
             port = self.com_port_selector.currentText()
             baudrate = self.baud_selector.value()
-            self.serial_thread = SerialReader(port, baudrate, channels=4)
+            mode = self.mode_selector.currentText()
+            self.serial_thread = SerialReader(port, baudrate, channels=4, ch1_amplitude=self.ch1_amplitude, mode=mode, impedance=self.impedance)
             self.serial_thread.data_received.connect(self.process_data)
             self.serial_thread.start()
             self.is_running = True
@@ -599,6 +612,35 @@ class OscilloscopeApp(QMainWindow):
     def toggle_grid(self, state):
         if self.plot_window:
             self.plot_window.plot_widget.showGrid(x=state, y=state, alpha=0.3)
+
+    def update_impedance(self, index):
+        impedance_str = self.impedance_combo.currentText()
+        if impedance_str == "1 MΩ":
+            self.impedance = 1e6
+        elif impedance_str == "50 Ω":
+            self.impedance = 50.0
+
+        if self.serial_thread:
+            self.serial_thread.set_impedance(self.impedance)
+
+        self.update_data()
+        self.update_plot()
+
+    def update_probe_attenuation(self, index):
+        attenuation_str = self.probe_attenuation_combo.currentText()
+        if attenuation_str == "1x":
+            self.probe_attenuation = 1.0
+        elif attenuation_str == "10x":
+            self.probe_attenuation = 10.0
+
+        self.update_data()
+        self.update_plot()
+
+    def update_data(self):
+        # Apply probe attenuation to the data buffer
+        for i in range(len(self.data_buffer)):
+            if self.channel_active[i]:
+                self.data_buffer[i] = [value / self.probe_attenuation for value in self.data_buffer[i]]
 
 
 if __name__ == '__main__':
