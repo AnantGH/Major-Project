@@ -538,7 +538,6 @@ class OscilloscopeApp(QMainWindow):
 
     def calculate_frequency(self, data):
         if len(data) < 2:
-            print("Not enough data points to calculate frequency.")
             return None
 
         data = np.array(data)  # Convert data to a NumPy array
@@ -547,25 +546,18 @@ class OscilloscopeApp(QMainWindow):
         if np.all(data >= 0):
             # Full-wave rectified (pulsating DC)
             peaks = np.where((data[1:-1] > data[:-2]) & (data[1:-1] > data[2:]))[0] + 1
-            print(f"Peaks: {peaks}")
             if len(peaks) < 2:
-                print("Not enough peaks to calculate frequency.")
                 return None
             period_samples = np.diff(peaks)
         else:
             # AC waveform
             zero_crossings = np.where(np.diff(np.sign(data)))[0]
-            print(f"Zero crossings: {zero_crossings}")
             if len(zero_crossings) < 2:
-                print("Not enough zero crossings to calculate frequency.")
                 return None
             period_samples = np.diff(zero_crossings)
 
-        print(f"Period samples: {period_samples}")
         avg_period_samples = np.mean(period_samples)
-        print(f"Average period in samples: {avg_period_samples}")
         frequency = self.sample_rate / avg_period_samples
-        print(f"Calculated frequency: {frequency}")
         return frequency
 
     def calculate_rms(self, data):
