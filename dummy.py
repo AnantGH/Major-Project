@@ -2,12 +2,11 @@ import sys
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-import pyqtgraph.exporters
 import time
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QLabel,
     QComboBox, QSpinBox, QTabWidget, QFileDialog, QHBoxLayout, QCheckBox,
-    QDoubleSpinBox, QSlider, QGroupBox, QFormLayout, QScrollArea
+    QDoubleSpinBox, QSlider, QGroupBox, QFormLayout, QScrollArea, QGridLayout  # Add QGridLayout here
 )
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QColor
@@ -15,38 +14,54 @@ from PyQt6.QtGui import QColor
 class SerialReader(QThread):
     data_received = pyqtSignal(list)
 
-    def __init__(self, channels=4, ch1_amplitude=2.5, mode='AC', impedance=1e6):
+    def __init__(self, channels=4, ch1_amplitude=2.5, impedance=1e6):
         super().__init__()
         self.channels = channels
         self.running = False
-        self.sample_rate = 200  # Increased sample rate for smoother waveform
+        self.sample_rate = 200
         self.time_step = 0.0
         self.ch1_amplitude = ch1_amplitude
-        self.mode = mode  # 'AC' for regular sine wave, 'DC' for full-wave rectified sine wave
-        self.impedance = impedance  # ohms
+        self.impedance = impedance
+        # Separate buffer and coupling mode for each channel
+        self.signal_buffers = [[] for _ in range(channels)]
+        self.coupling_modes = ['AC'] * channels  # Default AC coupling for all channels
+        self.frequency = 5
 
     def run(self):
         self.running = True
         while self.running:
             dummy_data = []
-            if self.mode == 'AC':
-                # Generate a regular sine wave
-                ch1_value = np.sin(2 * np.pi * 5 * self.time_step)  # 5 Hz frequency
-            elif self.mode == 'DC':
-                # Generate a full-wave rectified sine wave
-                ch1_value = np.abs(np.sin(2 * np.pi * 5 * self.time_step))  # 5 Hz frequency
 
-            # Simulate impedance effect if impedance is not infinite (very high resistance)
-            if self.impedance < float('inf'):
-                # Simple model: assume signal is attenuated by the impedance if low.
-                # This is a very basic model and doesn't reflect the full complexity of impedance effects.
-                if self.impedance < 1e6:  # Example: consider it low when below 1 MΩ
-                    attenuation_factor = self.impedance / 1e6  # Attenuate more as impedance decreases
-                    ch1_value *= attenuation_factor
-            dummy_data.append(ch1_value * self.ch1_amplitude)
+            # Generate and process each channel
+            for channel in range(self.channels):
+                # Generate signal (different for each channel)
+                if channel == 0:  # CH1
+                    base_signal = np.abs(np.sin(2 * np.pi * self.frequency * self.time_step))
+                else:  # Other channels
+                    base_signal = np.sin(2 * np.pi * (self.frequency/(channel+1)) * self.time_step)
 
-            for _ in range(self.channels - 1):
-                dummy_data.append(np.random.random())
+                # Apply coupling mode for this channel
+                if self.coupling_modes[channel] == 'AC':
+                    self.signal_buffers[channel].append(base_signal)
+                    if len(self.signal_buffers[channel]) > 100:
+                        self.signal_buffers[channel].pop(0)
+                    dc_offset = np.mean(self.signal_buffers[channel])
+                    channel_value = base_signal - dc_offset
+                    
+                elif self.coupling_modes[channel] == 'DC':
+                    channel_value = base_signal
+                    
+                elif self.coupling_modes[channel] == 'GND':
+                    channel_value = 0.0
+
+                # Apply amplitude and impedance (for CH1 only)
+                if channel == 0:
+                    channel_value *= self.ch1_amplitude
+                if self.impedance < 1e6:
+                    channel_value *= (self.impedance / 1e6)
+
+                dummy_data.append(channel_value)
+
             self.data_received.emit(dummy_data)
             self.time_step += 1.0 / self.sample_rate
             time.sleep(1.0 / self.sample_rate)
@@ -59,8 +74,11 @@ class SerialReader(QThread):
     def set_ch1_amplitude(self, amplitude):
         self.ch1_amplitude = amplitude
 
-    def set_mode(self, mode):
-        self.mode = mode
+    def set_channel_coupling(self, channel, mode):
+        """Set coupling mode for a specific channel"""
+        if 0 <= channel < self.channels:
+            self.coupling_modes[channel] = mode
+            self.signal_buffers[channel].clear()
 
     def set_impedance(self, impedance):
         self.impedance = impedance
@@ -114,7 +132,7 @@ class OscilloscopeApp(QMainWindow):
         self.plot_window = None
         self.ch1_amplitude = 2.5  # Default amplitude
         self.probe_attenuation = 1.0  # Default to 1x attenuation
-        self.impedance = 1e6  # Default to 1 MΩ impedance
+        self.impedance = 1e6  # Default to 1 MÎ© impedance
         self.initUI()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plot)
@@ -318,10 +336,6 @@ class OscilloscopeApp(QMainWindow):
         self.pos_slider.valueChanged.connect(self.update_vertical_position)
         vertical_layout.addWidget(QLabel("Position:"))
         vertical_layout.addWidget(self.pos_slider)
-        self.coupling_combo = QComboBox()
-        self.coupling_combo.addItems(["AC", "DC", "GND"])
-        vertical_layout.addWidget(QLabel("Coupling:"))
-        vertical_layout.addWidget(self.coupling_combo)
         vertical_group.setLayout(vertical_layout)
         control_layout.addWidget(vertical_group)
 
@@ -392,7 +406,7 @@ class OscilloscopeApp(QMainWindow):
         self.probe_attenuation_combo.currentIndexChanged.connect(self.update_probe_attenuation)
         input_layout.addRow("Probe Attenuation:", self.probe_attenuation_combo)
         self.impedance_combo = QComboBox()
-        self.impedance_combo.addItems(["1 MΩ", "50 Ω"])
+        self.impedance_combo.addItems(["1 MÎ©", "50 Î©"])
         self.impedance_combo.currentIndexChanged.connect(self.update_impedance)
         input_layout.addRow("Impedance:", self.impedance_combo)
         input_group.setLayout(input_layout)
@@ -462,15 +476,22 @@ class OscilloscopeApp(QMainWindow):
         ch1_amplitude_layout.addWidget(self.ch1_amplitude_spinbox)
         control_layout.addLayout(ch1_amplitude_layout)
 
-        # Add mode selection
-        mode_layout = QHBoxLayout()
-        mode_label = QLabel("Mode:")
-        mode_layout.addWidget(mode_label)
-        self.mode_selector = QComboBox()
-        self.mode_selector.addItems(["AC", "DC"])
-        self.mode_selector.currentTextChanged.connect(self.update_mode)
-        mode_layout.addWidget(self.mode_selector)
-        control_layout.addLayout(mode_layout)
+        # Replace the single mode selector with per-channel coupling controls
+        coupling_group = QGroupBox("Channel Coupling")
+        coupling_layout = QGridLayout()
+        self.coupling_combos = []
+        
+        for i in range(4):
+            label = QLabel(f"CH{i+1} Coupling:")
+            combo = QComboBox()
+            combo.addItems(["AC", "DC", "GND"])
+            combo.currentTextChanged.connect(lambda mode, ch=i: self.update_channel_coupling(ch, mode))
+            self.coupling_combos.append(combo)
+            coupling_layout.addWidget(label, i, 0)
+            coupling_layout.addWidget(combo, i, 1)
+            
+        coupling_group.setLayout(coupling_layout)
+        control_layout.addWidget(coupling_group)
 
         control_layout.addStretch()
         scroll.setWidget(control_widget)
@@ -620,8 +641,18 @@ class OscilloscopeApp(QMainWindow):
 
     def start_acquisition(self):
         if not self.serial_thread:
-            mode = self.mode_selector.currentText()
-            self.serial_thread = SerialReader(channels=4, ch1_amplitude=self.ch1_amplitude, mode=mode, impedance=self.impedance)
+            # Initialize SerialReader without mode parameter
+            self.serial_thread = SerialReader(
+                channels=4, 
+                ch1_amplitude=self.ch1_amplitude, 
+                impedance=self.impedance
+            )
+            
+            # Set initial coupling modes for all channels
+            for channel, combo in enumerate(self.coupling_combos):
+                mode = combo.currentText()
+                self.serial_thread.set_channel_coupling(channel, mode)
+                
             self.serial_thread.data_received.connect(self.process_data)
             self.serial_thread.start()
             self.is_running = True
@@ -697,9 +728,6 @@ class OscilloscopeApp(QMainWindow):
             except Exception:
                 pass
 
-    def update_coupling(self, text):
-        pass
-
     def record_data(self):
         filename, _ = QFileDialog.getSaveFileName(self, "Save Waveform Data", "", "CSV Files (*.csv);;All Files (*)")
         if filename:
@@ -745,9 +773,9 @@ class OscilloscopeApp(QMainWindow):
 
     def update_impedance(self, index):
         impedance_str = self.impedance_combo.currentText()
-        if impedance_str == "1 MΩ":
-            self.impedance = 1e6  # 1 MΩ in ohms
-        elif impedance_str == "50 Ω":
+        if impedance_str == "1 MÎ©":
+            self.impedance = 1e6  # 1 MÎ© in ohms
+        elif impedance_str == "50 Î©":
             self.impedance = 50.0
 
         # Update the serial thread if it's running
@@ -761,6 +789,12 @@ class OscilloscopeApp(QMainWindow):
     def update_data(self):
         # Implement any necessary data updates based on the new settings
         pass
+
+    def update_channel_coupling(self, channel, mode):
+        """Update coupling mode for a specific channel"""
+        if self.serial_thread:
+            self.serial_thread.set_channel_coupling(channel, mode)
+            self.update_plot()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
