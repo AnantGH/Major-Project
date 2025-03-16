@@ -98,16 +98,25 @@ class PlotWindow(QMainWindow):
         colors = ['#FF0000', '#00FF00', '#33CCFF', '#FFFF00']
         self.traces = [self.plot_widget.plot([], [], pen=pg.mkPen(color=color, width=2)) for color in colors]
 
-    def update_plot(self, data_buffer, channel_active, time_div, voltage_div, display_window, sample_rate, channel_positions, horizontal_position, probe_attenuation):
+    def update_plot(self, data_buffer, channel_active, time_div, voltage_div, display_window, 
+                    sample_rate, channel_positions, horizontal_position, probe_attenuation):
         sample_duration_ms = 1000 / sample_rate  
         display_window_ms = time_div * 100
+
+        selective_channel = self.parent().channel_time_div_selector.currentIndex()
 
         for i, trace in enumerate(self.traces):
             if channel_active[i] and data_buffer[i]:
                 num_points = min(len(data_buffer[i]), display_window)
                 x_values = np.linspace(0, display_window_ms, num_points)
                 x_values += horizontal_position * sample_duration_ms
-                y_values = np.array(data_buffer[i][-num_points:]) * voltage_div * probe_attenuation + channel_positions[i]
+
+                # Apply selective channel time division
+                time_div_factor = time_div if i == selective_channel else 1.0
+                y_values = (np.array(data_buffer[i][-num_points:]) * 
+                           voltage_div * probe_attenuation * time_div_factor + 
+                           channel_positions[i])
+
                 trace.setData(x_values, y_values)
             else:
                 trace.setData([], [])
@@ -132,7 +141,7 @@ class OscilloscopeApp(QMainWindow):
         self.plot_window = None
         self.ch1_amplitude = 2.5  # Default amplitude
         self.probe_attenuation = 1.0  # Default to 1x attenuation
-        self.impedance = 1e6  # Default to 1 MÎ© impedance
+        self.impedance = 1e6  # Default to 1 MΩ impedance
         self.initUI()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plot)
@@ -341,11 +350,20 @@ class OscilloscopeApp(QMainWindow):
 
         horizontal_group = QGroupBox("Horizontal Controls")
         horizontal_layout = QFormLayout()
+
+        # Add channel selector for time division
+        self.channel_time_div_selector = QComboBox()
+        self.channel_time_div_selector.addItems([f"CH{i + 1}" for i in range(4)])
+        horizontal_layout.addRow("Time Division Affects:", self.channel_time_div_selector)
+
+        # Existing time division control
         self.time_div_spinbox = QDoubleSpinBox()
         self.time_div_spinbox.setMinimum(0.1)
         self.time_div_spinbox.setMaximum(10)
         self.time_div_spinbox.setValue(1)
+        self.time_div_spinbox.valueChanged.connect(self.update_selected_channel_time_div)
         horizontal_layout.addRow("Time/Div:", self.time_div_spinbox)
+
         self.horiz_pos_slider = QSlider(Qt.Orientation.Horizontal)
         self.horiz_pos_slider.setRange(-50, 50)
         self.horiz_pos_slider.setValue(0)
@@ -406,7 +424,7 @@ class OscilloscopeApp(QMainWindow):
         self.probe_attenuation_combo.currentIndexChanged.connect(self.update_probe_attenuation)
         input_layout.addRow("Probe Attenuation:", self.probe_attenuation_combo)
         self.impedance_combo = QComboBox()
-        self.impedance_combo.addItems(["1 MÎ©", "50 Î©"])
+        self.impedance_combo.addItems(["1 MΩ", "50 Ω"])
         self.impedance_combo.currentIndexChanged.connect(self.update_impedance)
         input_layout.addRow("Impedance:", self.impedance_combo)
         input_group.setLayout(input_layout)
@@ -773,9 +791,9 @@ class OscilloscopeApp(QMainWindow):
 
     def update_impedance(self, index):
         impedance_str = self.impedance_combo.currentText()
-        if impedance_str == "1 MÎ©":
-            self.impedance = 1e6  # 1 MÎ© in ohms
-        elif impedance_str == "50 Î©":
+        if impedance_str == "1 MΩ":
+            self.impedance = 1e6  # 1 MΩ in ohms
+        elif impedance_str == "50 Ω":
             self.impedance = 50.0
 
         # Update the serial thread if it's running
@@ -794,6 +812,10 @@ class OscilloscopeApp(QMainWindow):
         """Update coupling mode for a specific channel"""
         if self.serial_thread:
             self.serial_thread.set_channel_coupling(channel, mode)
+            self.update_plot()
+
+    def update_selected_channel_time_div(self, time_div):
+        if self.plot_window:
             self.update_plot()
 
 if __name__ == '__main__':
