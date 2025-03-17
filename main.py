@@ -4,12 +4,11 @@ import serial.tools.list_ports
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-import pyqtgraph.exporters
 import time
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QLabel,
     QComboBox, QSpinBox, QTabWidget, QFileDialog, QHBoxLayout, QCheckBox,
-    QDoubleSpinBox, QSlider, QGroupBox, QFormLayout, QScrollArea
+    QDoubleSpinBox, QSlider, QGroupBox, QFormLayout, QScrollArea, QGridLayout  # Added QGridLayout
 )
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QColor
@@ -17,20 +16,21 @@ from PyQt6.QtGui import QColor
 class SerialReader(QThread):
     data_received = pyqtSignal(list)
 
-    def __init__(self, port, baudrate, channels=4, ch1_amplitude=2.5, mode='AC', impedance=1e6):
+    def __init__(self, port, baudrate, channels=4, ch1_amplitude=2.5, impedance=1e6):
         super().__init__()
         self.channels = channels
         self.running = False
         self.port = port
         self.baudrate = baudrate
         self.ch1_amplitude = ch1_amplitude
-        self.mode = mode
         self.impedance = impedance
+        self.signal_buffers = [[] for _ in range(channels)]  # For AC coupling
+        self.coupling_modes = ['AC'] * channels  # Default coupling modes
         try:
             self.ser = serial.Serial(port, baudrate)
             print(f"Connected to serial port: {port} at {baudrate} baud")
-        except serial.SerialException as e:
-            print(f"Error opening serial port: {e}")
+        except:
+            print(f"Failed to connect to {port}")
             self.ser = None
 
     def run(self):
@@ -43,11 +43,22 @@ class SerialReader(QThread):
                         serial_data = self.ser.readline().decode('utf-8').strip()
                         try:
                             data = [float(val) for val in serial_data.split(',')]
-                            # Simulate impedance effect if impedance is not infinite (very high resistance)
-                            if self.impedance < float('inf'):
-                                if self.impedance < 1e6:  # Example: consider it low when below 1 MΩ
-                                    attenuation_factor = self.impedance / 1e6  # Attenuate more as impedance decreases
-                                    data[0] *= attenuation_factor
+                            
+                            # Apply coupling modes to each channel
+                            for channel in range(min(len(data), self.channels)):
+                                if self.coupling_modes[channel] == 'AC':
+                                    self.signal_buffers[channel].append(data[channel])
+                                    if len(self.signal_buffers[channel]) > 100:
+                                        self.signal_buffers[channel].pop(0)
+                                    dc_offset = np.mean(self.signal_buffers[channel])
+                                    data[channel] -= dc_offset
+                                elif self.coupling_modes[channel] == 'GND':
+                                    data[channel] = 0.0
+
+                            # Apply impedance effect
+                            if self.impedance < 1e6:
+                                data[0] *= (self.impedance / 1e6)
+
                             self.data_received.emit(data)
                         except ValueError:
                             print(f"Invalid data received: {serial_data}")
@@ -74,6 +85,12 @@ class SerialReader(QThread):
 
     def set_impedance(self, impedance):
         self.impedance = impedance
+
+    def set_channel_coupling(self, channel, mode):
+        """Set coupling mode for a specific channel"""
+        if 0 <= channel < self.channels:
+            self.coupling_modes[channel] = mode
+            self.signal_buffers[channel].clear()
 
 class PlotWindow(QMainWindow):
     def __init__(self, parent=None):
@@ -394,7 +411,22 @@ class OscilloscopeApp(QMainWindow):
             channel_controls_layout.addWidget(checkbox)
         self.main_layout.addLayout(channel_controls_layout)
 
+        # Add after other control groups
+        coupling_group = QGroupBox("Channel Coupling")
+        coupling_layout = QGridLayout()
+        self.coupling_combos = []
 
+        for i in range(4):
+            label = QLabel(f"CH{i+1} Coupling:")
+            combo = QComboBox()
+            combo.addItems(["AC", "DC", "GND"])
+            combo.currentTextChanged.connect(lambda mode, ch=i: self.update_channel_coupling(ch, mode))
+            self.coupling_combos.append(combo)
+            coupling_layout.addWidget(label, i, 0)
+            coupling_layout.addWidget(combo, i, 1)
+            
+        coupling_group.setLayout(coupling_layout)
+        control_layout.addWidget(coupling_group)
 
         control_layout.addStretch()  # Push controls to top
         scroll.setWidget(control_widget)
@@ -413,34 +445,43 @@ class OscilloscopeApp(QMainWindow):
         if self.plot_window:
             time_div = self.time_div_spinbox.value()
             voltage_div = self.volt_div_spinbox.value()
-            raw_trigger_level = self.trigger_spinbox.value() / 1000
+            trigger_level = self.trigger_spinbox.value() / 1000
             trigger_source = self.trigger_source_combo.currentIndex()
             trigger_slope = self.trigger_slope_combo.currentText()
             trigger_mode = self.trigger_mode_combo.currentText()
 
+            # Check trigger condition
             triggered = False
-            if self.is_running:
-                for i, buffer in enumerate(self.data_buffer):
-                    if i == trigger_source and buffer and self.channel_active[i]:
-                        last_val = buffer[-2] if len(buffer) > 1 else buffer[-1]
-                        curr_val = buffer[-1]
-                        if (trigger_slope == "Rising" and last_val < raw_trigger_level <= curr_val) or \
-                           (trigger_slope == "Falling" and last_val > raw_trigger_level >= curr_val):
+            if trigger_mode != "Auto":  # Only check trigger for Normal and Single modes
+                if self.data_buffer[trigger_source] and len(self.data_buffer[trigger_source]) >= 2:
+                    for i in range(max(0, len(self.data_buffer[trigger_source]) - 100), 
+                                 len(self.data_buffer[trigger_source]) - 1):
+                        prev_val = self.data_buffer[trigger_source][i]
+                        curr_val = self.data_buffer[trigger_source][i + 1]
+                        
+                        if ((trigger_slope == "Rising" and 
+                             prev_val < trigger_level <= curr_val) or 
+                            (trigger_slope == "Falling" and 
+                             prev_val > trigger_level >= curr_val)):
                             triggered = True
                             break
 
             if trigger_mode == "Normal" and not triggered:
                 return
+            elif trigger_mode == "Single" and triggered:
+                self.stop_acquisition()
 
-            self.plot_window.update_plot(self.data_buffer, self.channel_active, time_div, voltage_div, 
-                                         self.display_window, self.sample_rate, self.channel_positions, 
-                                         self.horizontal_position, self.probe_attenuation)
-
-            if self.data_buffer[0]:
-                freq = self.calculate_frequency(self.data_buffer[0])
-                rms = np.sqrt(np.mean(np.square(self.data_buffer[0][-self.display_window:])))
-                self.measure_freq.setText(f"Frequency: {freq:.2f} Hz")
-                self.measure_rms.setText(f"RMS Voltage: {rms:.2f} V")
+            self.plot_window.update_plot(
+                self.data_buffer,
+                self.channel_active,
+                time_div,
+                voltage_div,
+                self.display_window,
+                self.sample_rate,
+                self.channel_positions,
+                self.horizontal_position,
+                self.probe_attenuation
+            )
 
     def calculate_frequency(self, buffer):
         if len(buffer) < 2:
@@ -455,8 +496,16 @@ class OscilloscopeApp(QMainWindow):
         if not self.serial_thread:
             port = self.com_port_selector.currentText()
             baudrate = self.baud_selector.value()
-            mode = self.mode_selector.currentText()
-            self.serial_thread = SerialReader(port, baudrate, channels=4, ch1_amplitude=self.ch1_amplitude, mode=mode, impedance=self.impedance)
+            self.serial_thread = SerialReader(port, baudrate, 
+                                            channels=4, 
+                                            ch1_amplitude=self.ch1_amplitude, 
+                                            impedance=self.impedance)
+            
+            # Set initial coupling modes
+            for channel, combo in enumerate(self.coupling_combos):
+                mode = combo.currentText()
+                self.serial_thread.set_channel_coupling(channel, mode)
+                
             self.serial_thread.data_received.connect(self.process_data)
             self.serial_thread.start()
             self.is_running = True
