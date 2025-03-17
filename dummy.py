@@ -622,40 +622,47 @@ class OscilloscopeApp(QMainWindow):
         if self.plot_window:
             time_div = self.time_div_spinbox.value()
             voltage_div = self.volt_div_spinbox.value()
-            raw_trigger_level = self.trigger_spinbox.value() / 1000
+            trigger_level = self.trigger_spinbox.value() / 1000
             trigger_source = self.trigger_source_combo.currentIndex()
             trigger_slope = self.trigger_slope_combo.currentText()
             trigger_mode = self.trigger_mode_combo.currentText()
 
+            # Check trigger condition
             triggered = False
-            if self.is_running:
-                for i, buffer in enumerate(self.data_buffer):
-                    if i == trigger_source and buffer and self.channel_active[i]:
-                        last_val = buffer[-2] if len(buffer) > 1 else buffer[-1]
-                        curr_val = buffer[-1]
-                        if (trigger_slope == "Rising" and last_val < raw_trigger_level <= curr_val) or \
-                           (trigger_slope == "Falling" and last_val > raw_trigger_level >= curr_val):
+            if trigger_mode != "Auto":  # Only check trigger for Normal and Single modes
+                if self.data_buffer[trigger_source] and len(self.data_buffer[trigger_source]) >= 2:
+                    # Look for trigger in recent samples
+                    for i in range(max(0, len(self.data_buffer[trigger_source]) - 100), 
+                                 len(self.data_buffer[trigger_source]) - 1):
+                        prev_val = self.data_buffer[trigger_source][i]
+                        curr_val = self.data_buffer[trigger_source][i + 1]
+                        
+                        # Check for trigger condition
+                        if ((trigger_slope == "Rising" and 
+                             prev_val < trigger_level <= curr_val) or 
+                            (trigger_slope == "Falling" and 
+                             prev_val > trigger_level >= curr_val)):
                             triggered = True
                             break
 
+            # Update display based on trigger mode
             if trigger_mode == "Normal" and not triggered:
-                return
+                return  # Don't update if not triggered in Normal mode
+            elif trigger_mode == "Single" and triggered:
+                self.stop_acquisition()  # Stop after single trigger
 
-            self.plot_window.update_plot(self.data_buffer, self.channel_active, time_div, voltage_div, 
-                                         self.display_window, self.sample_rate, self.channel_positions, 
-                                         self.horizontal_position, self.probe_attenuation)
-
-            # Calculate and update frequency and RMS voltage
-            if self.channel_active[0] and self.data_buffer[0]:
-                # Apply probe attenuation to the data
-                attenuated_data = [value / self.probe_attenuation for value in self.data_buffer[0]]
-                frequency = self.calculate_frequency(attenuated_data)
-                rms_voltage = self.calculate_rms(attenuated_data)
-                self.measure_freq.setText(f"Frequency: {frequency:.2f} Hz" if frequency else "Frequency: N/A")
-                self.measure_rms.setText(f"RMS Voltage: {rms_voltage:.2f} V")
-            else:
-                self.measure_freq.setText("Frequency: N/A")
-                self.measure_rms.setText("RMS Voltage: N/A")
+            # Update the display
+            self.plot_window.update_plot(
+                self.data_buffer,
+                self.channel_active,
+                time_div,
+                voltage_div,
+                self.display_window,
+                self.sample_rate,
+                self.channel_positions,
+                self.horizontal_position,
+                self.probe_attenuation
+            )
 
     def start_acquisition(self):
         if not self.serial_thread:
