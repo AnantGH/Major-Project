@@ -149,96 +149,129 @@ class OscilloscopeApp(QMainWindow):
     def initUI(self):
         self.setStyleSheet("""
             QWidget {
-                background-color: #121212;
-                color: #ffffff;
+                background-color: #0f172a;  /* Dark blue background */
+                color: #e2e8f0;
             }
             QGroupBox {
-                border: 1px solid #555;
-                border-radius: 5px;
+                background-color: #1e293b;  /* Slightly lighter blue */
+                border: 1px solid #334155;
+                border-radius: 8px;
                 margin-top: 1ex;
-                padding: 10px;
+                padding: 12px;
                 font-weight: bold;
-                color: #ffffff;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 10px;
-                padding: 0 3px 0 3px;
+                padding: 0 5px;
+                color: #60a5fa;  /* Bright blue for titles */
             }
             QLabel {
-                color: #ffffff;
+                color: #e2e8f0;
+                font-weight: 500;
             }
             QComboBox, QSpinBox, QDoubleSpinBox {
-                background-color: #2c2c2c;
-                color: #ffffff;
-                border: 1px solid #555;
-                border-radius: 3px;
-                padding: 2px;
+                background-color: #293548;
+                color: #e2e8f0;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                padding: 5px;
+                min-height: 24px;
+            }
+            QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
+                background-color: #334155;
+                border-color: #60a5fa;
             }
             QComboBox::drop-down {
-                border: 0px;
-                width: 20px;
-                background-color: #2c2c2c;
-            }
-            QComboBox::down-arrow {
-                image: url(:/qt-project.org/styles/commonstyle/images/downarrow-ffffff-20.png);
-            }
-            QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
-                background-color: #2c2c2c;
-                border: 1px solid #555;
-                width: 16px;
-            }
-            QSlider::groove:horizontal {
-                border: 1px solid #999;
-                height: 8px;
-                background: #333;
-                margin: 2px 0;
-            }
-            QSlider::handle:horizontal {
-                background: #fff;
-                border: 1px solid #777;
-                width: 14px;
-                height: 14px;
-                margin: -4px 0;
-                border-radius: 7px;
-            }
-            QSlider::add-page:horizontal {
-                background: #555;
-            }
-            QSlider::sub-page:horizontal {
-                background: #777;
-            }
-            QCheckBox {
-                color: #ffffff;
+                border: none;
+                width: 24px;
             }
             QPushButton {
-                padding: 10px;
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-weight: bold;
+                color: white;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.1);  /* Lighten effect on hover */
+                margin-top: -1px;  /* Slight lift effect */
+                margin-bottom: 1px;
+            }
+            QPushButton#start_button { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3b82f6, stop:1 #2563eb);
+            }
+            QPushButton#start_button:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #60a5fa, stop:1 #3b82f6);
+            }
+            QPushButton#stop_button { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ef4444, stop:1 #dc2626);
+            }
+            QPushButton#stop_button:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f87171, stop:1 #ef4444);
+            }
+            QPushButton#run_button { 
+                background: linear-gradient(135deg, #f59e0b, #d97706);
+            }
+            QPushButton#auto_set_button { 
+                background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+            }
+            QPushButton#default_button { 
+                background: linear-gradient(135deg, #64748b, #475569);
+            }
+            QPushButton#save_button { 
+                background: linear-gradient(135deg, #22c55e, #16a34a);
+            }
+            QPushButton#record_button { 
+                background: linear-gradient(135deg, #06b6d4, #0891b2);
+            }
+            QSlider::groove:horizontal {
+                border: none;
+                height: 6px;
+                background: #334155;
                 border-radius: 3px;
-                color: #ffffff;
             }
-            QPushButton#start_button { background-color: #1E88E5; }
-            QPushButton#stop_button { background-color: #D32F2F; }
-            QPushButton#run_button { background-color: #FF9800; }
-            QPushButton#auto_set_button { background-color: #FF5722; }
-            QPushButton#default_button { background-color: #9E9E9E; }
-            QPushButton#save_button { background-color: #388E3C; }
-            QPushButton#record_button { background-color: #90bf43; }
-            QTabWidget {
-                background-color: #121212;
+            QSlider::handle:horizontal {
+                background: #60a5fa;
+                border: 2px solid #3b82f6;
+                width: 18px;
+                height: 18px;
+                margin: -6px 0;
+                border-radius: 9px;
             }
-            QTabBar::tab {
-                background-color: #2c2c2c;
-                color: #ffffff;
-                padding: 10px;
-                margin-right: 2px;
-                border: 1px solid #555;
-                border-bottom: none;
-                border-top-left-radius: 3px;
-                border-top-right-radius: 3px;
+            QSlider::handle:horizontal:hover {
+                background: #3b82f6;
+                border-color: #2563eb;
             }
-            QTabBar::tab:selected {
-                background-color: #1E88E5;
-                color: #ffffff;
+            QCheckBox {
+                spacing: 8px;
+                color: #e2e8f0;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 2px solid #475569;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #3b82f6;
+                border-color: #2563eb;
+            }
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar {
+                background-color: #1e293b;
+                border-radius: 4px;
+                width: 12px;
+            }
+            QScrollBar::handle {
+                background-color: #475569;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:hover {
+                background-color: #60a5fa;
             }
         """)
         central_widget = QWidget()
@@ -354,7 +387,7 @@ class OscilloscopeApp(QMainWindow):
         # Add channel selector for time division
         self.channel_time_div_selector = QComboBox()
         self.channel_time_div_selector.addItems([f"CH{i + 1}" for i in range(4)])
-        horizontal_layout.addRow("Time Division Affects:", self.channel_time_div_selector)
+        horizontal_layout.addRow("Channel:", self.channel_time_div_selector)
 
         # Existing time division control
         self.time_div_spinbox = QDoubleSpinBox()
