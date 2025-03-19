@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QColor
+from pyqtgraph.exporters import ImageExporter
 
 class SerialReader(QThread):
     data_received = pyqtSignal(list)
@@ -100,29 +101,37 @@ class PlotWindow(QMainWindow):
 
     def update_plot(self, data_buffer, channel_active, time_div, voltage_div, display_window, 
                     sample_rate, channel_positions, horizontal_position, probe_attenuation):
-        sample_duration_ms = 1000 / sample_rate  
-        display_window_ms = time_div * 100
-
-        selective_channel = self.parent().channel_time_div_selector.currentIndex()
-
+        # Calculate time base with microsecond precision
+        sample_duration_us = 1000000.0 / sample_rate  # Convert to microseconds
+        total_div = 10  # Standard oscilloscope has 10 divisions
+        display_window_time = time_div * total_div  # Total time window
+        
         for i, trace in enumerate(self.traces):
             if channel_active[i] and data_buffer[i]:
                 num_points = min(len(data_buffer[i]), display_window)
-                x_values = np.linspace(0, display_window_ms, num_points)
-                x_values += horizontal_position * sample_duration_ms
-
-                # Apply selective channel time division
-                time_div_factor = time_div if i == selective_channel else 1.0
-                y_values = (np.array(data_buffer[i][-num_points:]) * 
-                           voltage_div * probe_attenuation * time_div_factor + 
-                           channel_positions[i])
-
+                
+                # Generate time values (x-axis) with microsecond precision
+                x_values = np.linspace(
+                    horizontal_position * time_div * 1000000,  # Convert to microseconds
+                    (horizontal_position * time_div + display_window_time) * 1000000,
+                    num_points
+                ) / 1000000.0  # Convert back to seconds for display
+                
+                # Scale voltage values (y-axis)
+                y_values = np.array(data_buffer[i][-num_points:])
+                y_values = y_values / probe_attenuation
+                y_values = y_values + (channel_positions[i] / 100.0 * 8 * voltage_div)
+                
                 trace.setData(x_values, y_values)
             else:
                 trace.setData([], [])
 
-        self.plot_widget.setXRange(horizontal_position * sample_duration_ms,
-                                   horizontal_position * sample_duration_ms + display_window_ms)
+        # Set view ranges with microsecond precision
+        self.plot_widget.setXRange(
+            horizontal_position * time_div,
+            horizontal_position * time_div + display_window_time
+        )
+        self.plot_widget.setYRange(-4 * voltage_div, 4 * voltage_div)
 
 class OscilloscopeApp(QMainWindow):
     def __init__(self):
@@ -134,7 +143,7 @@ class OscilloscopeApp(QMainWindow):
         self.display_window = 500  # Increased from 100 to 500 for better resolution
         self.sample_rate = 100  # Match the SerialReader sample rate
         self.serial_thread = None
-        self.channel_active = [True, True, True, True]
+        self.channel_active = [True, False, False, False]  # Only CH1 active by default
         self.channel_positions = [0, 0, 0, 0]
         self.horizontal_position = 0
         self.is_running = False
@@ -142,6 +151,8 @@ class OscilloscopeApp(QMainWindow):
         self.ch1_amplitude = 2.5  # Default amplitude
         self.probe_attenuation = 1.0  # Default to 1x attenuation
         self.impedance = 1e6  # Default to 1 MΩ impedance
+        self.coupling_modes = ['DC'] * 4  # Default to DC coupling
+        self.trigger_level = 0  # Default 0V trigger
         self.initUI()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plot)
@@ -345,9 +356,11 @@ class OscilloscopeApp(QMainWindow):
         self.channel_selector.addItems(["CH1", "CH2", "CH3", "CH4"])
         vertical_layout.addWidget(self.channel_selector)
         self.volt_div_spinbox = QDoubleSpinBox()
-        self.volt_div_spinbox.setMinimum(0.1)
-        self.volt_div_spinbox.setMaximum(10)
-        self.volt_div_spinbox.setValue(1)
+        self.volt_div_spinbox.setRange(1e-3, 1e3)  # 1mV to 1000V
+        self.volt_div_spinbox.setValue(1.0)  # Default 1V/div
+        self.volt_div_spinbox.setDecimals(3)  # Allow millivolt precision
+        self.volt_div_spinbox.setSingleStep(1e-3)  # Millivolt steps
+        self.volt_div_spinbox.setStepType(QDoubleSpinBox.StepType.AdaptiveDecimalStepType)
         vertical_layout.addWidget(QLabel("Volts/Div:"))
         vertical_layout.addWidget(self.volt_div_spinbox)
         self.pos_slider = QSlider(Qt.Orientation.Horizontal)
@@ -391,9 +404,11 @@ class OscilloscopeApp(QMainWindow):
 
         # Existing time division control
         self.time_div_spinbox = QDoubleSpinBox()
-        self.time_div_spinbox.setMinimum(0.1)
-        self.time_div_spinbox.setMaximum(10)
-        self.time_div_spinbox.setValue(1)
+        self.time_div_spinbox.setRange(1e-9, 1e6)  # 1ns to 1000000s
+        self.time_div_spinbox.setValue(1.0)  # Default 1ms/div
+        self.time_div_spinbox.setDecimals(9)  # Allow nanosecond precision
+        self.time_div_spinbox.setSingleStep(1e-9)  # Nanosecond steps
+        self.time_div_spinbox.setStepType(QDoubleSpinBox.StepType.AdaptiveDecimalStepType)
         self.time_div_spinbox.valueChanged.connect(self.update_selected_channel_time_div)
         horizontal_layout.addRow("Time/Div:", self.time_div_spinbox)
 
@@ -430,8 +445,8 @@ class OscilloscopeApp(QMainWindow):
         trigger_group = QGroupBox("Trigger Controls")
         trigger_layout = QFormLayout()
         self.trigger_spinbox = QDoubleSpinBox()
-        self.trigger_spinbox.setRange(0, 5000)
-        self.trigger_spinbox.setValue(2000)
+        self.trigger_spinbox.setRange(-5000, 5000)  # Allow negative values
+        self.trigger_spinbox.setValue(0)  # Default 0V
         trigger_layout.addRow("Trigger Level:", self.trigger_spinbox)
         self.trigger_mode_combo = QComboBox()
         self.trigger_mode_combo.addItems(["Auto", "Normal", "Single"])
@@ -501,16 +516,19 @@ class OscilloscopeApp(QMainWindow):
         self.record_button = QPushButton("Record Waveform")
         self.record_button.setStyleSheet("background-color: #90bf43; color: white; padding: 10px;")
         self.record_button.clicked.connect(self.record_data)
-        utility_layout.addWidget(self.record_button)
         utility_group.setLayout(utility_layout)
         control_layout.addWidget(utility_group)
 
+        # Update the channel controls section
         channel_controls_layout = QHBoxLayout()
         self.channel_checkboxes = []
         for i in range(4):
             checkbox = QCheckBox(f"CH{i+1}")
-            checkbox.setChecked(True)
-            checkbox.stateChanged.connect(lambda state, idx=i: self.toggle_channel(idx, state))
+            checkbox.setChecked(i == 0)  # Only check CH1 (index 0)
+            if i == 0:  # Only enable CH1 checkbox
+                checkbox.stateChanged.connect(lambda state, idx=i: self.toggle_channel(idx, state))
+            else:
+                checkbox.setEnabled(False)  # Disable other channels
             checkbox.setStyleSheet(f"color: {colors[i]};")
             self.channel_checkboxes.append(checkbox)
             channel_controls_layout.addWidget(checkbox)
@@ -520,9 +538,11 @@ class OscilloscopeApp(QMainWindow):
         ch1_amplitude_label = QLabel("CH1 Amplitude (V):")
         ch1_amplitude_layout.addWidget(ch1_amplitude_label)
         self.ch1_amplitude_spinbox = QDoubleSpinBox()
-        self.ch1_amplitude_spinbox.setRange(0.1, 10.0)
-        self.ch1_amplitude_spinbox.setValue(2.5)
-        self.ch1_amplitude_spinbox.setSingleStep(0.1)
+        self.ch1_amplitude_spinbox.setRange(0.001, 1000.0)  # Changed from 0.1-10V to 1mV-1000V
+        self.ch1_amplitude_spinbox.setValue(2.5)  # Default stays at 2.5V
+        self.ch1_amplitude_spinbox.setDecimals(3)  # Allow millivolt precision
+        self.ch1_amplitude_spinbox.setSingleStep(0.001)  # 1mV steps
+        self.ch1_amplitude_spinbox.setStepType(QDoubleSpinBox.StepType.AdaptiveDecimalStepType)
         self.ch1_amplitude_spinbox.valueChanged.connect(self.update_ch1_amplitude)
         ch1_amplitude_layout.addWidget(self.ch1_amplitude_spinbox)
         control_layout.addLayout(ch1_amplitude_layout)
@@ -532,10 +552,12 @@ class OscilloscopeApp(QMainWindow):
         coupling_layout = QGridLayout()
         self.coupling_combos = []
         
+        # Initialize coupling combos with DC default
         for i in range(4):
             label = QLabel(f"CH{i+1} Coupling:")
             combo = QComboBox()
-            combo.addItems(["AC", "DC", "GND"])
+            combo.addItems(["DC", "AC", "GND"])  # Make DC first option
+            combo.setCurrentText("DC")  # Set DC as default
             combo.currentTextChanged.connect(lambda mode, ch=i: self.update_channel_coupling(ch, mode))
             self.coupling_combos.append(combo)
             coupling_layout.addWidget(label, i, 0)
@@ -606,7 +628,54 @@ class OscilloscopeApp(QMainWindow):
                                             self.channel_positions, self.horizontal_position, self.probe_attenuation)
 
     def auto_set(self):
-        pass
+        """Automatically adjust settings to fit waveform on screen"""
+        if not self.data_buffer[0]:  # If no data, return
+            return
+
+        # Get active channel data
+        active_channel_data = None
+        for i, data in enumerate(self.data_buffer):
+            if self.channel_active[i] and data:
+                active_channel_data = data
+                break
+
+        if active_channel_data is None:
+            return
+
+        # Calculate peak-to-peak voltage
+        data_array = np.array(active_channel_data)
+        min_voltage = np.min(data_array)
+        max_voltage = np.max(data_array)
+        vpp = max_voltage - min_voltage
+
+        if vpp == 0:  # Avoid division by zero
+            return
+
+        # Set Volts/Div to fit waveform height (use 6 divisions)
+        new_volts_div = vpp / 6
+        self.volt_div_spinbox.setValue(max(0.1, min(new_volts_div, 10)))
+
+        # Calculate and set Time/Div
+        samples_per_division = len(active_channel_data) / 10  # Use 10 horizontal divisions
+        time_per_sample = 1.0 / self.sample_rate
+        new_time_div = samples_per_division * time_per_sample
+        self.time_div_spinbox.setValue(max(0.1, min(new_time_div, 10)))
+
+        # Center waveform vertically
+        center = (max_voltage + min_voltage) / 2
+        vertical_position = -center / self.volt_div_spinbox.value()
+        self.pos_slider.setValue(int(max(-100, min(vertical_position * 100, 100))))
+
+        # Reset horizontal position
+        self.horiz_pos_slider.setValue(0)
+        self.horizontal_position = 0
+
+        # Set trigger level to 50% of Vpp
+        trigger_level = min_voltage + (vpp / 2)
+        self.trigger_spinbox.setValue(trigger_level * 1000)  # Convert to mV
+
+        # Update the display
+        self.update_plot()
 
     def calculate_frequency(self, data):
         if len(data) < 2:
@@ -636,20 +705,44 @@ class OscilloscopeApp(QMainWindow):
         return np.sqrt(np.mean(np.square(data)))
 
     def default_setup(self):
-        self.time_div_spinbox.setValue(1)
-        self.volt_div_spinbox.setValue(1)
-        self.trigger_spinbox.setValue(2000)
-        self.trigger_mode_combo.setCurrentText("Normal")
+        """Reset all settings to default oscilloscope values"""
+        # Time and Voltage settings
+        self.time_div_spinbox.setValue(1.0)      # 1 sec/div
+        self.volt_div_spinbox.setValue(1.0)      # 1 V/div
+
+        # Trigger settings
+        self.trigger_spinbox.setValue(0)         # 0V trigger level
+        self.trigger_mode_combo.setCurrentText("Auto")
         self.trigger_source_combo.setCurrentText("CH1")
         self.trigger_slope_combo.setCurrentText("Rising")
         self.trigger_holdoff_spinbox.setValue(0)
-        self.pos_slider.setValue(0)
-        self.horiz_pos_slider.setValue(0)
-        self.channel_active = [True, True, True, True]
-        for checkbox in self.channel_checkboxes:
-            checkbox.setChecked(True)
-        if self.plot_window:
-            self.update_plot()
+
+        # Position settings
+        self.pos_slider.setValue(0)             # Center vertical position
+        self.horiz_pos_slider.setValue(0)       # Center horizontal position
+        self.horizontal_position = 0
+
+        # Channel settings
+        self.channel_active = [True, False, False, False]  # Only CH1 active
+        for i, checkbox in enumerate(self.channel_checkboxes):
+            checkbox.setChecked(i == 0)
+
+        # Coupling settings
+        for combo in self.coupling_combos:
+            combo.setCurrentText("DC")          # Set DC coupling as default
+
+        # Input settings
+        self.probe_attenuation_combo.setCurrentText("1x")
+        self.impedance_combo.setCurrentText("1 MΩ")
+
+        # Update hardware settings if running
+        if self.serial_thread:
+            self.serial_thread.set_impedance(1e6)
+            for channel in range(4):
+                self.serial_thread.set_channel_coupling(channel, "DC")
+
+        # Update display
+        self.update_plot()
 
     def update_plot(self):
         if self.plot_window:
@@ -756,35 +849,29 @@ class OscilloscopeApp(QMainWindow):
             self.update_plot()
 
     def save_data(self):
-        filename, _ = QFileDialog.getSaveFileName(self, "Save Snapshot", "", "PNG Files (*.png);;JPG Files (*.jpg);;All Files (*)")
+        filename, _ = QFileDialog.getSaveFileName(
+            self, 
+            "Save Snapshot", 
+            "", 
+            "PNG Files (*.png);;JPG Files (*.jpg);;All Files (*)"
+        )
         if filename:
             try:
                 if not (filename.endswith('.png') or filename.endswith('.jpg')):
                     filename += '.png'
+                
                 if self.plot_window:
-                    exporter = pg.exporters.ImageExporter(self.plot_window.plot_widget.plotItem)
+                    exporter = ImageExporter(self.plot_window.plot_widget.plotItem)
+                    exporter.params.param('width').setValue(1200)
+                    exporter.params.param('height').setValue(800)
+                    exporter.params.param('antialias').setValue(True)
+                    exporter.export(filename)
+                    print(f"Snapshot saved to {filename}")
                 else:
-                    plot_widget = pg.PlotWidget()
-                    plot_widget.setTitle("Oscilloscope Signal")
-                    plot_widget.setLabel('left', 'Voltage', 'V')
-                    plot_widget.setLabel('bottom', 'Time', 'ms')
-                    plot_widget.showGrid(x=True, y=True, alpha=0.3)
-                    plot_widget.setBackground('#000A1E')
-                    colors = ['#FF0000', '#00FF00', '#33CCFF', '#FFFF00']
-                    traces = [plot_widget.plot([], [], pen=pg.mkPen(color=color, width=2)) for color in colors]
-                    for i, trace in enumerate(traces):
-                        if self.channel_active[i] and self.data_buffer[i]:
-                            num_points = min(len(self.data_buffer[i]), self.display_window)
-                            x_values = np.linspace(0, num_points * (1000 / self.sample_rate) / (self.time_div_spinbox.value() * 10), num_points)
-                            y_values = np.array(self.data_buffer[i][-num_points:]) * self.volt_div_spinbox.value()
-                            trace.setData(x_values, y_values)
-                    exporter = pg.exporters.ImageExporter(plot_widget.plotItem)
-                exporter.parameters()['width'] = 900
-                exporter.export(filename)
-            except PermissionError:
-                pass
-            except Exception:
-                pass
+                    print("No plot window available to save")
+            except Exception as e:
+                print(f"Error saving snapshot: {e}")
+                QMessageBox.critical(self, "Error", f"Could not save snapshot: {str(e)}")
 
     def record_data(self):
         filename, _ = QFileDialog.getSaveFileName(self, "Save Waveform Data", "", "CSV Files (*.csv);;All Files (*)")
