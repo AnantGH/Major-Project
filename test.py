@@ -26,64 +26,43 @@ class SerialReader(QThread):
         self.coupling_modes = ['DC'] * channels  # DC coupling is default
         self.data_index = 0
         
-        # Load CSV data
+        # Load data from data1.csv
         try:
-            # Read CSV and convert string pairs to numerical values
-            with open(r"C:\Users\Anant Raj\Major Project\data.csv", 'r') as file:
-                lines = file.readlines()
-                self.csv_data = []
-                for line in lines:
-                    # Remove brackets and split time,voltage pairs
-                    clean_line = line.strip('[\n]').split(',')
-                    if len(clean_line) == 2:
-                        try:
-                            time = float(clean_line[0])                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     
-                            voltage = float(clean_line[1])
-                            self.csv_data.append([time, voltage])
-                        except ValueError:
-                            continue
-                
-            print(f"Loaded {len(self.csv_data)} samples from CSV")
+            # Load the entire dataset at once using numpy
+            data = np.loadtxt('data1.csv', delimiter=',')
+            self.signal = data[:, 0]  # First column is signal (voltage)
+            self.time = data[:, 1]    # Second column is time
+            print(f"Loaded {len(self.signal)} samples")
+            print(f"First few voltage values: {self.signal[:5]}")
         except Exception as e:
             print(f"Error loading CSV: {e}")
-            self.csv_data = None
+            self.signal = None
+            self.time = None
 
     def run(self):
-        if self.csv_data is None:
-            return
-
-        self.running = True
-        batch_size = 1000
-        buffer_size = 500
-        
-        while self.running:
+        if self.signal is not None and self.running:
             try:
-                data_batch = [0.0] * self.channels  # Initialize with zeros for all channels
+                # Create data batch for all channels
+                data_batch = [[] for _ in range(self.channels)]
                 
-                if self.data_index >= len(self.csv_data):
-                    self.data_index = 0
-                    
-                # Get voltage for Channel 1 only
-                voltage = self.csv_data[self.data_index][1]
-                
-                # Process Channel 1 data
+                # Process voltage data with coupling
                 if self.coupling_modes[0] == 'AC':
-                    self.signal_buffers[0].append(voltage)
-                    if len(self.signal_buffers[0]) > 100:
-                        self.signal_buffers[0].pop(0)
-                    dc_offset = np.mean(self.signal_buffers[0])
-                    voltage -= dc_offset
+                    dc_offset = np.mean(self.signal)
+                    processed_signal = self.signal - dc_offset
                 elif self.coupling_modes[0] == 'GND':
-                    voltage = 0.0
+                    processed_signal = np.zeros_like(self.signal)
+                else:  # DC coupling
+                    processed_signal = self.signal
+
+                # Put the processed signal in channel 1
+                data_batch[0] = processed_signal.tolist()
                 
-                data_batch[0] = voltage  # Set Channel 1 value
-                self.data_received.emit(data_batch)  # Emit single data point
-                self.data_index += 1
-                
-                time.sleep(0.001)  # Small delay between points
+                # Send the entire dataset
+                self.data_received.emit(data_batch)
+                self.running = False
                     
             except Exception as e:
-                print(f"Error processing data: {e}")
+                print(f"Error in run(): {e}")
                 self.running = False
 
     def stop(self):
