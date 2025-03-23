@@ -16,55 +16,69 @@ from PyQt6.QtGui import QColor
 class SerialReader(QThread):
     data_received = pyqtSignal(list)
 
-    def __init__(self, port, baudrate, channels=4, ch1_amplitude=2.5, impedance=1e6):
+    def __init__(self, port, baudrate, channels=4, impedance=1e6):
         super().__init__()
         self.channels = channels
         self.running = False
         self.port = port
         self.baudrate = baudrate
-        self.ch1_amplitude = ch1_amplitude
         self.impedance = impedance
-        self.signal_buffers = [[] for _ in range(channels)]  # For AC coupling
-        self.coupling_modes = ['AC'] * channels  # Default coupling modes
+        self.coupling_modes = ['DC'] * channels
+        self.signal_buffers = [[] for _ in range(channels)]
+        self.buffer_size = 1000  # Store last 1000 samples
+        
         try:
+            print(f"Connecting to {port} at {baudrate} baud...")
             self.ser = serial.Serial(port, baudrate)
-            print(f"Connected to serial port: {port} at {baudrate} baud")
-        except:
-            print(f"Failed to connect to {port}")
+            print("Connected successfully")
+        except Exception as e:
+            print(f"Connection failed: {e}")
             self.ser = None
 
     def run(self):
-        if self.ser:
-            self.running = True
-            print("Starting serial data acquisition")
+        if not self.ser:
+            return
+            
+        print("Starting data acquisition...")
+        self.running = True
+        
+        try:
             while self.running:
-                try:
-                    if self.ser.in_waiting > 0:
-                        serial_data = self.ser.readline().decode('utf-8').strip()
-                        try:
-                            data = [float(val) for val in serial_data.split(',')]
+                if self.ser.in_waiting > 0:
+                    try:
+                        # Read one sample from serial
+                        line = self.ser.readline().decode().strip()
+                        values = [float(val) for val in line.split(',')]
+                        
+                        # Process each channel
+                        data_batch = []
+                        for channel, value in enumerate(values[:self.channels]):
+                            # Apply coupling
+                            if self.coupling_modes[channel] == 'AC':
+                                self.signal_buffers[channel].append(value)
+                                if len(self.signal_buffers[channel]) > 100:
+                                    self.signal_buffers[channel].pop(0)
+                                dc_offset = np.mean(self.signal_buffers[channel])
+                                processed_value = value - dc_offset
+                            elif self.coupling_modes[channel] == 'GND':
+                                processed_value = 0
+                            else:  # DC coupling
+                                processed_value = value
                             
-                            # Apply coupling modes to each channel
-                            for channel in range(min(len(data), self.channels)):
-                                if self.coupling_modes[channel] == 'AC':
-                                    self.signal_buffers[channel].append(data[channel])
-                                    if len(self.signal_buffers[channel]) > 100:
-                                        self.signal_buffers[channel].pop(0)
-                                    dc_offset = np.mean(self.signal_buffers[channel])
-                                    data[channel] -= dc_offset
-                                elif self.coupling_modes[channel] == 'GND':
-                                    data[channel] = 0.0
-
-                            # Apply impedance effect
-                            if self.impedance < 1e6:
-                                data[0] *= (self.impedance / 1e6)
-
-                            self.data_received.emit(data)
-                        except ValueError:
-                            print(f"Invalid data received: {serial_data}")
-                except serial.SerialException as e:
-                    print(f"Serial read error: {e}")
-                    self.running = False
+                            data_batch.append(processed_value)
+                        
+                        # Emit the processed values
+                        self.data_received.emit(data_batch)
+                        
+                    except Exception as e:
+                        print(f"Error processing sample: {e}")
+                        
+        except Exception as e:
+            print(f"Acquisition error: {e}")
+        finally:
+            self.running = False
+            if self.ser and self.ser.is_open:
+                self.ser.close()
 
     def stop(self):
         self.running = False
@@ -97,15 +111,80 @@ class PlotWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("Waveform Display")
         self.setGeometry(200, 200, 900, 600)
+        
+        # Create main widget and layout
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        layout = QVBoxLayout(main_widget)
+        
+        # Add zoom control buttons
+        zoom_layout = QHBoxLayout()
+        self.zoom_in_btn = QPushButton("Zoom In")
+        self.zoom_out_btn = QPushButton("Zoom Out")
+        self.reset_zoom_btn = QPushButton("Reset Zoom")
+        
+        # Style buttons
+        for btn in [self.zoom_in_btn, self.zoom_out_btn, self.reset_zoom_btn]:
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #293548;
+                    color: white;
+                    padding: 5px;
+                    border-radius: 3px;
+                }
+                QPushButton:hover {
+                    background-color: #3b4d61;
+                }
+            """)
+        
+        # Connect button signals
+        self.zoom_in_btn.clicked.connect(self.zoom_in)
+        self.zoom_out_btn.clicked.connect(self.zoom_out)
+        self.reset_zoom_btn.clicked.connect(self.reset_zoom)
+        
+        # Add buttons to layout
+        zoom_layout.addWidget(self.zoom_in_btn)
+        zoom_layout.addWidget(self.zoom_out_btn)
+        zoom_layout.addWidget(self.reset_zoom_btn)
+        layout.addLayout(zoom_layout)
+
+        # Create plot widget
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setTitle("Oscilloscope Signal")
+        self.plot_widget.setBackground('#000A1E')
+        layout.addWidget(self.plot_widget)
+        
+        # Enable mouse interactions
+        self.plot_widget.setMouseEnabled(x=True, y=True)
+        self.plot_widget.setInteractive(True)
+        
+        # Configure ViewBox
+        self.view_box = self.plot_widget.getViewBox()
+        self.view_box.enableAutoRange(axis='xy')
+        self.view_box.setMouseMode(self.view_box.RectMode)
+        self.view_box.setMenuEnabled(True)
+        
+        # Configure appearance
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         self.plot_widget.setLabel('left', 'Voltage', 'V')
         self.plot_widget.setLabel('bottom', 'Time', 'ms')
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_widget.setBackground('#000A1E')
-        self.setCentralWidget(self.plot_widget)
+        self.plot_widget.setTitle("Oscilloscope Signal")
+        
+        # Create traces with different colors
         colors = ['#FF0000', '#00FF00', '#33CCFF', '#FFFF00']
-        self.traces = [self.plot_widget.plot([], [], pen=pg.mkPen(color=color, width=2)) for color in colors]
+        self.traces = [self.plot_widget.plot([], [], pen=pg.mkPen(color=color, width=2)) 
+                      for color in colors]
+
+    def zoom_in(self):
+        """Zoom in by scaling the view."""
+        self.view_box.scaleBy((0.5, 0.5))
+
+    def zoom_out(self):
+        """Zoom out by scaling the view."""
+        self.view_box.scaleBy((2, 2))
+
+    def reset_zoom(self):
+        """Reset the zoom to the default view."""
+        self.view_box.autoRange()
 
     def update_plot(self, data_buffer, channel_active, time_div, voltage_div, display_window, sample_rate, channel_positions, horizontal_position, probe_attenuation):
         sample_duration_ms = 1000 / sample_rate  
@@ -139,7 +218,6 @@ class OscilloscopeApp(QMainWindow):
         self.horizontal_position = 0
         self.is_running = False
         self.plot_window = None
-        self.ch1_amplitude = 2.5
         self.probe_attenuation = 1.0
         self.impedance = 1e6
         self.initUI()
@@ -520,7 +598,7 @@ class OscilloscopeApp(QMainWindow):
         for i in range(4):
             label = QLabel(f"CH{i+1} Coupling:")
             combo = QComboBox()
-            combo.addItems(["AC", "DC", "GND"])
+            combo.addItems(["DC", "AC", "GND"])
             combo.currentTextChanged.connect(lambda mode, ch=i: self.update_channel_coupling(ch, mode))
             self.coupling_combos.append(combo)
             coupling_layout.addWidget(label, i, 0)
@@ -598,8 +676,7 @@ class OscilloscopeApp(QMainWindow):
             port = self.com_port_selector.currentText()
             baudrate = self.baud_selector.value()
             self.serial_thread = SerialReader(port, baudrate, 
-                                            channels=4, 
-                                            ch1_amplitude=self.ch1_amplitude, 
+                                            channels=4,
                                             impedance=self.impedance)
             
             # Set initial coupling modes
@@ -626,12 +703,21 @@ class OscilloscopeApp(QMainWindow):
                                         self.channel_positions, self.horizontal_position)
 
     def process_data(self, data):
-        for i in range(min(len(data), len(self.data_buffer))):
-            self.data_buffer[i].append(data[i])
-            if len(self.data_buffer[i]) > self.max_samples:
-                self.data_buffer[i].pop(0)
-        if self.is_running and self.plot_window:
-            self.update_plot()
+        try:
+            # Add new data points to buffers
+            for i, value in enumerate(data):
+                if i < len(self.data_buffer):
+                    self.data_buffer[i].append(value)
+                    # Keep buffer size limited
+                    while len(self.data_buffer[i]) > self.max_samples:
+                        self.data_buffer[i].pop(0)
+            
+            # Update plot if running
+            if self.is_running and self.plot_window:
+                self.update_plot()
+                
+        except Exception as e:
+            print(f"Error processing data: {e}")
 
     def change_time_division(self, delta):
         new_val = self.time_div_spinbox.value() + delta

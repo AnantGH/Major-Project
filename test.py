@@ -17,53 +17,82 @@ from pyqtgraph.exporters import ImageExporter
 class SerialReader(QThread):
     data_received = pyqtSignal(list)
 
-    def __init__(self, channels=4, impedance=1e6):  # Removed ch1_amplitude
+    def __init__(self, channels=4, impedance=1e6):
         super().__init__()
         self.channels = channels
         self.running = False
         self.impedance = impedance
-        self.signal_buffers = [[] for _ in range(channels)]
-        self.coupling_modes = ['DC'] * channels  # DC coupling is default
-        self.data_index = 0
-        
-        # Load data from data1.csv
+        self.coupling_modes = ['DC'] * channels
+        self.signal_buffers = [[] for _ in range(self.channels)]
+
+        # Load data during initialization
+        self.load_data()
+        self.data_processed = False  # Flag to track whether data was processed
+
+    def load_data(self):
+        """Load data from the CSV file"""
         try:
-            # Load the entire dataset at once using numpy
-            data = np.loadtxt('data1.csv', delimiter=',')
-            self.signal = data[:, 0]  # First column is signal (voltage)
-            self.time = data[:, 1]    # Second column is time
-            print(f"Loaded {len(self.signal)} samples")
+            data = np.loadtxt('data1.csv', delimiter=',', dtype=float)
+            print("Loading data from data1.csv...")
+            
+            # Verify data structure
+            if data.ndim != 2 or data.shape[1] != 2:
+                raise ValueError("Data file must have 2 columns (voltage and time)")
+                
+            self.signal = data[:, 0]  # First column (voltage)
+            self.time = data[:, 1]    # Second column (time)
+            print(f"Loaded {len(self.signal)} samples.")
             print(f"First few voltage values: {self.signal[:5]}")
+            print(f"First few time values: {self.time[:5]}")
+            return True
+            
         except Exception as e:
-            print(f"Error loading CSV: {e}")
+            print(f"Error loading data: {e}")
             self.signal = None
             self.time = None
+            return False
 
     def run(self):
-        if self.signal is not None and self.running:
-            try:
-                # Create data batch for all channels
-                data_batch = [[] for _ in range(self.channels)]
+        """Process and emit waveform data with proper coupling"""
+        print("Starting waveform projection...")
+        
+        if self.signal is None or not self.running:
+            print("No data available or not running")
+            return
+            
+        try:
+            # Create data batch
+            data_batch = [[] for _ in range(self.channels)]
+            
+            # Process voltage data with coupling for channel 1
+            if self.coupling_modes[0] == 'AC':
+                # Calculate DC offset from entire signal
+                dc_offset = np.mean(self.signal)
+                processed_signal = self.signal - dc_offset
+                print(f"AC Coupling: Removed DC offset of {dc_offset:.3f}V")
                 
-                # Process voltage data with coupling
-                if self.coupling_modes[0] == 'AC':
-                    dc_offset = np.mean(self.signal)
-                    processed_signal = self.signal - dc_offset
-                elif self.coupling_modes[0] == 'GND':
-                    processed_signal = np.zeros_like(self.signal)
-                else:  # DC coupling
-                    processed_signal = self.signal
-
-                # Put the processed signal in channel 1
-                data_batch[0] = processed_signal.tolist()
+            elif self.coupling_modes[0] == 'GND':
+                # Ground coupling: set entire signal to zero
+                processed_signal = np.zeros_like(self.signal)
+                print("GND Coupling: Signal grounded")
                 
-                # Send the entire dataset
-                self.data_received.emit(data_batch)
-                self.running = False
-                    
-            except Exception as e:
-                print(f"Error in run(): {e}")
-                self.running = False
+            else:  # DC coupling
+                # Pass through original signal
+                processed_signal = self.signal
+                print("DC Coupling: Original signal preserved")
+                
+            # Store processed signal in channel 1
+            data_batch[0] = processed_signal.tolist()
+            
+            # Emit the processed data
+            print(f"Emitting {len(data_batch[0])} points")
+            self.data_received.emit(data_batch)
+            
+        except Exception as e:
+            print(f"Error in run(): {e}")
+        finally:
+            self.running = False
+            print("Waveform processing complete")
 
     def stop(self):
         self.running = False
@@ -79,51 +108,128 @@ class SerialReader(QThread):
             self.coupling_modes[channel] = mode
             self.signal_buffers[channel].clear()
 
+
 class PlotWindow(QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Waveform Display")
         self.setGeometry(200, 200, 900, 600)
+
+        # Create main widget and layout
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        layout = QVBoxLayout(main_widget)
+
+        # Add zoom control buttons
+        zoom_layout = QHBoxLayout()
+        self.zoom_in_btn = QPushButton("Zoom In")
+        self.zoom_out_btn = QPushButton("Zoom Out")
+        self.reset_zoom_btn = QPushButton("Reset Zoom")
+
+        # Style the buttons
+        for btn in [self.zoom_in_btn, self.zoom_out_btn, self.reset_zoom_btn]:
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #293548;
+                    color: white;
+                    padding: 5px;
+                    border-radius: 3px;
+                }
+                QPushButton:hover {
+                    background-color: #3b4d61;
+                }
+            """)
+
+        # Connect button signals
+        self.zoom_in_btn.clicked.connect(self.zoom_in)
+        self.zoom_out_btn.clicked.connect(self.zoom_out)
+        self.reset_zoom_btn.clicked.connect(self.reset_zoom)
+
+        # Add buttons to layout
+        zoom_layout.addWidget(self.zoom_in_btn)
+        zoom_layout.addWidget(self.zoom_out_btn)
+        zoom_layout.addWidget(self.reset_zoom_btn)
+        layout.addLayout(zoom_layout)
+
+        # Create plot widget with mouse interaction enabled
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setTitle("Oscilloscope Signal")
+        self.plot_widget.setBackground('#000A1E')
+        layout.addWidget(self.plot_widget)
+
+        # Enable mouse interactions
+        self.plot_widget.setMouseEnabled(x=True, y=True)
+        self.plot_widget.setInteractive(True)
+
+        # Get the ViewBox and enable its features
+        self.view_box = self.plot_widget.getViewBox()
+        self.view_box.enableAutoRange(axis='xy')
+        self.view_box.setMouseMode(self.view_box.RectMode)
+        self.view_box.setMenuEnabled(True)
+
+        # Configure plot appearance
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         self.plot_widget.setLabel('left', 'Voltage', 'V')
         self.plot_widget.setLabel('bottom', 'Time', 'ms')
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_widget.setBackground('#000A1E')
-        self.setCentralWidget(self.plot_widget)
+        self.plot_widget.setTitle("Oscilloscope Signal")
+
+        # Create plot curves with different colors
         colors = ['#FF0000', '#00FF00', '#33CCFF', '#FFFF00']
-        self.traces = [self.plot_widget.plot([], [], pen=pg.mkPen(color=color, width=2)) for color in colors]
-
-    def update_plot(self, data_buffer, channel_active, time_div, voltage_div, display_window, 
-                   sample_rate, channel_positions, horizontal_position, probe_attenuation):
-        # Calculate time base
-        total_div = 10  # Standard oscilloscope has 10 divisions
-        display_window_time = time_div * total_div  # Total time window
+        self.traces = [self.plot_widget.plot([], [], pen=pg.mkPen(color=color, width=2)) 
+                      for color in colors]
         
-        for i, trace in enumerate(self.traces):
-            if channel_active[i] and data_buffer[i]:
-                num_points = min(len(data_buffer[i]), display_window)
-                
-                # Generate time values (x-axis) with proper scaling for horizontal movement
-                time_per_point = time_div / (num_points / total_div)
-                x_values = np.arange(num_points) * time_per_point
-                x_values = x_values - (horizontal_position * time_div)  # Apply horizontal shift
-                
-                # Scale voltage values (y-axis)
-                y_values = np.array(data_buffer[i][-num_points:])
-                y_values = y_values / probe_attenuation
-                y_values = y_values + (channel_positions[i] / 100.0 * 8 * voltage_div)
-                
-                trace.setData(x_values, y_values)
-            else:
-                trace.setData([], [])
+        print("Grid constructed successfully")
+        
+    def zoom_in(self):
+        """Zoom in by scaling the view."""
+        self.view_box.scaleBy((0.5, 0.5))
 
-        # Set view ranges to match time divisions
-        self.plot_widget.setXRange(
-            -time_div * 5,  # Show 5 divisions before center
-            time_div * 5    # Show 5 divisions after center
-        )
-        self.plot_widget.setYRange(-4 * voltage_div, 4 * voltage_div)
+    def zoom_out(self):
+        """Zoom out by scaling the view."""
+        self.view_box.scaleBy((2, 2))
+
+    def reset_zoom(self):
+        """Reset the zoom to the default view."""
+        self.view_box.autoRange()
+
+    def update_plot(self, data_buffer, channel_active, time_div, voltage_div, 
+                    display_window, sample_rate, channel_positions, horizontal_position, 
+                    probe_attenuation):
+        try:
+            print("Starting plot update...")
+
+            # Calculate time base parameters
+            samples_per_div = int(time_div * sample_rate)
+            total_time_window = time_div * 10  # 10 divisions total
+            total_samples = int(total_time_window * sample_rate)
+
+            for i, trace in enumerate(self.traces):
+                if channel_active[i] and data_buffer[i]:
+                    # Create time values based on time/div setting
+                    num_points = len(data_buffer[i])
+                    x_values = np.linspace(0, total_time_window, num_points)
+                    y_values = np.array(data_buffer[i]) / probe_attenuation
+
+                    # Apply vertical offset
+                    y_values += channel_positions[i] * voltage_div
+
+                    # Update the trace
+                    trace.setData(x_values, y_values)
+
+                    print(f"Channel {i+1}: Plotting {len(y_values)} points over {total_time_window}s")
+
+            # Set X axis range based on time/div
+            self.plot_widget.setXRange(-time_div * horizontal_position, 
+                                     time_div * (10 - horizontal_position))
+            
+            # Set Y axis range
+            self.plot_widget.setYRange(-4 * voltage_div, 4 * voltage_div)
+            
+            print(f"Plot ranges set - Time: {-time_div * horizontal_position} to {time_div * (10 - horizontal_position)}s")
+            print("Plot update completed successfully")
+
+        except Exception as e:
+            print(f"Error updating plot: {e}")
+
 
 class OscilloscopeApp(QMainWindow):
     def __init__(self):
@@ -140,7 +246,7 @@ class OscilloscopeApp(QMainWindow):
         self.horizontal_position = 0
         self.is_running = False
         self.plot_window = None
-        self.ch1_amplitude = 2.5
+        self.plot_updated = False
         self.probe_attenuation = 1.0
         self.impedance = 1e6
         self.initUI()
@@ -243,6 +349,12 @@ class OscilloscopeApp(QMainWindow):
             QSlider::handle:horizontal:hover {
                 background: #3b82f6;
                 border-color: #2563eb;
+            }
+            QSlider::add-page:horizontal {
+                background: #555;
+            }
+            QSlider::sub-page:horizontal {
+                background: #777;
             }
             QCheckBox {
                 spacing: 8px;
@@ -480,7 +592,6 @@ class OscilloscopeApp(QMainWindow):
         self.record_button = QPushButton("Record Waveform")
         self.record_button.setStyleSheet("background-color: #90bf43; color: white; padding: 10px;")
         self.record_button.clicked.connect(self.record_data)
-        utility_layout.addWidget(self.record_button)
         utility_group.setLayout(utility_layout)
         self.main_layout.addWidget(utility_group)
 
@@ -531,36 +642,66 @@ class OscilloscopeApp(QMainWindow):
         self.com_port_selector.clear()
         self.com_port_selector.addItems(ports if ports else ["No Ports Found"])
 
+    def update_intensity(self, value):
+        """Updates the waveform intensity based on slider value."""
+        if not self.plot_window:
+            return  # Do nothing if the plot window isn't open
+
+        alpha = value / 100.0  # Normalize slider value to 0–1
+        for trace in self.plot_window.traces:
+            # Adjust alpha (transparency) of each trace
+            color = QColor(trace.opts['pen'].color())
+            color.setAlphaF(alpha)
+            trace.setPen(pg.mkPen(color=color, width=2))
+        
+        self.update_plot()  # Redraw plot with updated intensity
+
     def update_plot(self):
-        if self.plot_window:
-            time_div = self.time_div_spinbox.value()
-            voltage_div = self.volt_div_spinbox.value()
-            trigger_level = self.trigger_spinbox.value() / 1000
-            trigger_source = self.trigger_source_combo.currentIndex()
-            trigger_slope = self.trigger_slope_combo.currentText()
-            trigger_mode = self.trigger_mode_combo.currentText()
+        """Checks trigger conditions and updates the plot with valid data."""
+        if not self.plot_window:
+            print("Plot window not initialized. Skipping update.")
+            return
 
-            # Check trigger condition
-            triggered = False
-            if trigger_mode != "Auto":  # Only check trigger for Normal and Single modes
-                if self.data_buffer[trigger_source] and len(self.data_buffer[trigger_source]) >= 2:
-                    for i in range(max(0, len(self.data_buffer[trigger_source]) - 100), 
-                                 len(self.data_buffer[trigger_source]) - 1):
-                        prev_val = self.data_buffer[trigger_source][i]
-                        curr_val = self.data_buffer[trigger_source][i + 1]
-                        
-                        if ((trigger_slope == "Rising" and 
-                             prev_val < trigger_level <= curr_val) or 
-                            (trigger_slope == "Falling" and 
-                             prev_val > trigger_level >= curr_val)):
-                            triggered = True
-                            break
+        # Step 1: Get plot and trigger settings
+        time_div = self.time_div_spinbox.value()
+        voltage_div = self.volt_div_spinbox.value()
+        trigger_level = self.trigger_spinbox.value() / 1000
+        trigger_source = self.trigger_source_combo.currentIndex()
+        trigger_slope = self.trigger_slope_combo.currentText()
+        trigger_mode = self.trigger_mode_combo.currentText()
 
-            if trigger_mode == "Normal" and not triggered:
-                return
-            elif trigger_mode == "Single" and triggered:
-                self.stop_acquisition()
+        # Debug: Notify trigger check
+        print("Checking trigger conditions...")
 
+        # Step 2: Trigger Handling
+        triggered = False
+        if trigger_mode != "Auto":  # Skip trigger checks for Auto mode
+            if self.data_buffer[trigger_source] and len(self.data_buffer[trigger_source]) >= 2:
+                for i in range(max(0, len(self.data_buffer[trigger_source]) - 100),
+                            len(self.data_buffer[trigger_source]) - 1):
+                    prev_val = self.data_buffer[trigger_source][i]
+                    curr_val = self.data_buffer[trigger_source][i + 1]
+
+                    if ((trigger_slope == "Rising" and prev_val < trigger_level <= curr_val) or
+                        (trigger_slope == "Falling" and prev_val > trigger_level >= curr_val)):
+                        triggered = True
+                        print(f"Trigger detected on channel {trigger_source + 1}")
+                        break
+
+        # Step 3: Handle trigger modes
+        if trigger_mode == "Normal" and not triggered:
+            print("No trigger detected. Skipping plot update.")
+            return
+        elif trigger_mode == "Single" and triggered:
+            print("Single trigger detected. Stopping acquisition.")
+            self.stop_acquisition()
+
+        # Step 4: Check data buffer validity and update the plot
+        if any(self.data_buffer):  # Ensure there's valid data to plot
+            print("Starting plot update...")
+            print(f"Buffer data sample (channel 1): {self.data_buffer[0][:5]}")
+
+            # Call the plot window's update method
             self.plot_window.update_plot(
                 self.data_buffer,
                 self.channel_active,
@@ -572,6 +713,11 @@ class OscilloscopeApp(QMainWindow):
                 self.horizontal_position,
                 self.probe_attenuation
             )
+            print("Plot update completed successfully.")
+        else:
+            print("Data buffer is empty or invalid. Skipping plot update.")
+
+
 
     def calculate_frequency(self, buffer):
         if len(buffer) < 2:
@@ -583,7 +729,10 @@ class OscilloscopeApp(QMainWindow):
         return crossings / (self.display_window * (1000 / self.sample_rate) / 1000.0) / 2.0
 
     def start_acquisition(self):
-        if not self.serial_thread:
+        """Start data acquisition and initialize SerialReader if necessary."""
+        # Step 1: Check if SerialReader already exists
+        if not hasattr(self, 'serial_thread') or self.serial_thread is None:
+            print("SerialReader instance does not exist. Creating a new instance.")
             self.serial_thread = SerialReader(
                 channels=4,
                 impedance=self.impedance
@@ -593,12 +742,24 @@ class OscilloscopeApp(QMainWindow):
             for channel, combo in enumerate(self.coupling_combos):
                 mode = combo.currentText()
                 self.serial_thread.set_channel_coupling(channel, mode)
-                
+            
+            # Connect the data_received signal to process_data
             self.serial_thread.data_received.connect(self.process_data)
-            self.serial_thread.start()
-            self.is_running = True
-            if self.plot_window:
-                self.timer.start(50)
+
+        # Step 2: Debug: Confirm SerialReader instance and its state
+        print(f"SerialReader instance ID: {id(self.serial_thread)}")
+        print(f"Setting SerialReader.running to True before starting the thread.")
+
+        # Step 3: Start the SerialReader thread
+        self.serial_thread.running = True  # Ensure the running flag is set to True
+        self.serial_thread.start()
+
+        # Step 4: Start the plot update timer if the plot window exists
+        self.is_running = True
+        if self.plot_window:
+            self.timer.start(50)
+            print("Plot update timer started.")
+
 
     def stop_acquisition(self):
         if self.serial_thread:
@@ -613,21 +774,56 @@ class OscilloscopeApp(QMainWindow):
                                         self.channel_positions, self.horizontal_position)
 
     def process_data(self, data):
-        # Process single data point
-        for i in range(len(self.data_buffer)):
-            if i < len(data):
-                self.data_buffer[i].append(data[i])
-                while len(self.data_buffer[i]) > self.max_samples:
-                    self.data_buffer[i].pop(0)
-        
-        if self.is_running and self.plot_window:
+        """Processes incoming data and updates the buffer."""
+        try:
+            # Debug: Print the number of channels updated
+            print(f"Data received: {len(data)} channels updated")
+
+            # Debug: Print first 5 values of each channel
+            for i, channel_data in enumerate(data):
+                print(f"Channel {i+1} data: {channel_data[:5]}... (first 5 values)")
+
+            # Step 1: Update the data buffer
+            self.data_buffer = data
+
+            # Step 2: Apply buffer size limits (to prevent excessive memory usage)
+            max_buffer_size = 100000  # Example: Limit buffer size to 100k points
+            for i in range(len(self.data_buffer)):
+                if len(self.data_buffer[i]) > max_buffer_size:
+                    print(f"Channel {i+1} buffer exceeded {max_buffer_size} points. Truncating to latest {max_buffer_size} points.")
+                    self.data_buffer[i] = self.data_buffer[i][-max_buffer_size:]
+
+            # Step 3: Reset the plot_updated flag
+            self.plot_updated = False  # Mark the plot as needing an update
+
+            # Step 4: Trigger the plot update
             self.update_plot()
 
+        except Exception as e:
+            print(f"Error in process_data: {e}")
+
+
+
     def change_time_division(self, delta):
-        new_val = self.time_div_spinbox.value() + delta
-        if 0.1 <= new_val <= self.time_div_spinbox.maximum():
-            self.time_div_spinbox.setValue(new_val)
-            self.update_plot()
+        """Handle time/division changes with validation"""
+        try:
+            current_val = self.time_div_spinbox.value()
+            new_val = current_val + delta
+            
+            # Ensure value is within valid range
+            min_val = 1e-9  # 1 ns/div
+            max_val = 1e6   # 1000000 s/div
+            
+            if min_val <= new_val <= max_val:
+                print(f"Changing time/div from {current_val} to {new_val}")
+                self.time_div_spinbox.setValue(new_val)
+                if self.plot_window:
+                    self.update_plot()
+            else:
+                print(f"Invalid time/div value: {new_val}")
+                
+        except Exception as e:
+            print(f"Error changing time division: {e}")
 
     def change_voltage_division(self, delta):
         new_val = self.volt_div_spinbox.value() + delta
@@ -800,7 +996,7 @@ class OscilloscopeApp(QMainWindow):
             if self.channel_active[i]:
                 self.data_buffer[i] = [value / self.probe_attenuation for value in self.data_buffer[i]]
 
-
+    
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = OscilloscopeApp()
