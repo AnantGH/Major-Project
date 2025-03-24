@@ -198,34 +198,37 @@ class PlotWindow(QMainWindow):
             print("Starting plot update...")
 
             # Calculate time base parameters
-            samples_per_div = int(time_div * sample_rate)
-            total_time_window = time_div * 10  # 10 divisions total
-            total_samples = int(total_time_window * sample_rate)
-
+            total_time = time_div * 10  # Total time window (10 divisions)
+            
             for i, trace in enumerate(self.traces):
                 if channel_active[i] and data_buffer[i]:
-                    # Create time values based on time/div setting
-                    num_points = len(data_buffer[i])
-                    x_values = np.linspace(0, total_time_window, num_points)
+                    # Get data points
                     y_values = np.array(data_buffer[i]) / probe_attenuation
-
+                    num_points = len(y_values)
+                    
+                    # Create time values scaled by time_div
+                    x_values = np.linspace(0, total_time, len(y_values))  # Scale time axis based on time_div
+                    
                     # Apply vertical offset
                     y_values += channel_positions[i] * voltage_div
-
+                    
                     # Update the trace
                     trace.setData(x_values, y_values)
+                    
+                    print(f"Channel {i+1}: Plotting {len(y_values)} points over {total_time}s")
 
-                    print(f"Channel {i+1}: Plotting {len(y_values)} points over {total_time_window}s")
-
-            # Set X axis range based on time/div
-            self.plot_widget.setXRange(-time_div * horizontal_position, 
-                                     time_div * (10 - horizontal_position))
+            # Set X axis range based on time/div and horizontal position
+            x_min = -time_div * 5 + horizontal_position * time_div
+            x_max = time_div * 5 + horizontal_position * time_div
+            self.plot_widget.setXRange(x_min, x_max)
             
-            # Set Y axis range
+            # Set Y axis range for voltage
             self.plot_widget.setYRange(-4 * voltage_div, 4 * voltage_div)
             
-            print(f"Plot ranges set - Time: {-time_div * horizontal_position} to {time_div * (10 - horizontal_position)}s")
+            print(f"Plot ranges set - Time: {x_min} to {x_max}s")
             print("Plot update completed successfully")
+            print(f"Time Division: {time_div}s/div")
+            print(f"X-Axis Range: {x_min}s to {x_max}s")
 
         except Exception as e:
             print(f"Error updating plot: {e}")
