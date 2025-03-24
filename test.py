@@ -595,6 +595,7 @@ class OscilloscopeApp(QMainWindow):
         self.record_button = QPushButton("Record Waveform")
         self.record_button.setStyleSheet("background-color: #90bf43; color: white; padding: 10px;")
         self.record_button.clicked.connect(self.record_data)
+        utility_layout.addWidget(self.record_button)
         utility_group.setLayout(utility_layout)
         self.main_layout.addWidget(utility_group)
 
@@ -929,42 +930,33 @@ class OscilloscopeApp(QMainWindow):
         self.update_plot()
 
     def record_data(self):
-        print("Record Waveform button clicked")
         filename, _ = QFileDialog.getSaveFileName(self, "Save Waveform Data", "", "CSV Files (*.csv);;All Files (*)")
-        print(f"Selected filename: {filename}")
         if filename:
             if not filename.endswith('.csv'):
                 filename += '.csv'
             try:
-                # Prepare data for CSV
                 max_length = max(len(buffer) for buffer in self.data_buffer if buffer)
                 if max_length == 0:
-                    print("No data to save - all channels are empty")
                     with open(filename, 'w') as file:
                         file.write("No data available\n")
                     return
 
-                # Create a dictionary to hold the data for each active channel
                 data_dict = {}
                 for i, buffer in enumerate(self.data_buffer):
                     if self.channel_active[i]:
                         data_dict[f"Channel {i+1}"] = buffer + [0.0] * (max_length - len(buffer)) if buffer else [0.0] * max_length
 
-                # If no active channels have data, write a message
                 if not data_dict:
-                    print("No active channels have data to save")
                     with open(filename, 'w') as file:
                         file.write("No active channels have data\n")
                     return
 
-                # Convert to DataFrame and save to CSV
                 df = pd.DataFrame(data_dict)
                 df.to_csv(filename, index_label="Sample")
-                print(f"Waveform data saved to {filename}")
             except PermissionError:
-                print(f"Permission denied: Cannot write to {filename}")
-            except Exception as e:
-                print(f"Error saving waveform data: {e}")
+                pass
+            except Exception:
+                pass
 
     def toggle_grid(self, state):
         if self.plot_window:

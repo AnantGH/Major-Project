@@ -823,12 +823,34 @@ class OscilloscopeApp(QMainWindow):
                                         self.channel_positions, self.horizontal_position, self.probe_attenuation)
 
     def process_data(self, data):
-        for i in range(min(len(data), len(self.data_buffer))):
-            self.data_buffer[i].append(data[i])
-            if len(self.data_buffer[i]) > self.max_samples:
-                self.data_buffer[i].pop(0)
-        if self.is_running and self.plot_window:
-            self.update_plot()
+        try:
+            # Existing data buffer update code...
+            for i in range(min(len(data), len(self.data_buffer))):
+                self.data_buffer[i].append(data[i])
+                if len(self.data_buffer[i]) > self.max_samples:
+                    self.data_buffer[i].pop(0)
+
+            # Calculate and update frequency and RMS for active channels
+            for i, buffer in enumerate(self.data_buffer):
+                if self.channel_active[i] and buffer:
+                    # Frequency calculation
+                    freq = self.calculate_frequency(buffer)
+                    if freq is not None:
+                        self.measure_freq.setText(f"Frequency: {freq:.2f} Hz")
+                    else:
+                        self.measure_freq.setText("Frequency: N/A")
+                    
+                    # RMS calculation
+                    rms = self.calculate_rms(buffer)
+                    self.measure_rms.setText(f"RMS Voltage: {rms:.3f} V")
+                    break  # Only show first active channel's measurements
+
+            # Update plot if running
+            if self.is_running and self.plot_window:
+                self.update_plot()
+
+        except Exception as e:
+            print(f"Error processing data: {e}")
 
     def change_time_division(self, delta):
         new_val = self.time_div_spinbox.value() + delta

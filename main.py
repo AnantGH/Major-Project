@@ -213,7 +213,7 @@ class OscilloscopeApp(QMainWindow):
         self.display_window = 500
         self.sample_rate = 100
         self.serial_thread = None
-        self.channel_active = [True, True, True, True]
+        self.channel_active = [True, False, False, False]
         self.channel_positions = [0, 0, 0, 0]
         self.horizontal_position = 0
         self.is_running = False
@@ -501,7 +501,7 @@ class OscilloscopeApp(QMainWindow):
         trigger_layout = QFormLayout()
         self.trigger_spinbox = QDoubleSpinBox()
         self.trigger_spinbox.setRange(0, 5000)
-        self.trigger_spinbox.setValue(2500)
+        self.trigger_spinbox.setValue(0000)
         trigger_layout.addRow("Trigger Level:", self.trigger_spinbox)
         self.trigger_mode_combo = QComboBox()
         self.trigger_mode_combo.addItems(["Auto", "Normal", "Single"])
@@ -583,7 +583,7 @@ class OscilloscopeApp(QMainWindow):
         self.channel_checkboxes = []
         for i in range(4):
             checkbox = QCheckBox(f"CH{i+1}")
-            checkbox.setChecked(True)
+            checkbox.setChecked(i == 0)
             checkbox.stateChanged.connect(lambda state, idx=i: self.toggle_channel(idx, state))
             checkbox.setStyleSheet(f"color: {colors[i]};")
             self.channel_checkboxes.append(checkbox)
@@ -785,7 +785,7 @@ class OscilloscopeApp(QMainWindow):
     def default_setup(self):
         self.time_div_spinbox.setValue(1)
         self.volt_div_spinbox.setValue(1)
-        self.trigger_spinbox.setValue(2500)
+        self.trigger_spinbox.setValue(0000)
         self.trigger_mode_combo.setCurrentText("Auto")
         self.trigger_source_combo.setCurrentText("CH1")
         self.trigger_slope_combo.setCurrentText("Rising")
