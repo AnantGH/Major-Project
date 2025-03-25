@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 print("Loading data from data1.csv...")
 try:
     # Load the entire dataset - first column is signal, second is time
-    data = np.loadtxt('data2.csv', delimiter=',')
+    data = np.loadtxt('data1.csv', delimiter=',')
     signal = data[:, 0]  # First column - voltage values
     time = data[:, 1]    # Second column - time values
     print(f"Loaded {len(signal)} samples")

@@ -32,7 +32,7 @@ class SerialReader(QThread):
     def load_data(self):
         """Load data from the CSV file"""
         try:
-            data = np.loadtxt('data1.csv', delimiter=',', dtype=float)
+            data = np.loadtxt('data.csv', delimiter=',', dtype=float)
             print("Loading data from data1.csv...")
             
             # Verify data structure
@@ -255,6 +255,13 @@ class OscilloscopeApp(QMainWindow):
         self.initUI()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plot)
+
+        # Add trigger system attributes
+        self.trigger_state = "Armed"
+        self.pre_trigger_buffer = []
+        self.trigger_hysteresis = 0.1  # 10% of vertical division
+        self.trigger_position = 0.5  # Default trigger position (center of screen)
+        self.last_trigger_index = None
 
     def initUI(self):
         self.setStyleSheet("""
@@ -511,7 +518,10 @@ class OscilloscopeApp(QMainWindow):
         self.horiz_pos_slider.valueChanged.connect(self.update_horizontal_position)
         horizontal_layout.addRow("Position:", self.horiz_pos_slider)
         horizontal_group.setLayout(horizontal_layout)
-        self.main_layout.addWidget(horizontal_group)  # Changed to self.main_layout
+        self.main_layout.addWidget(horizontal_group)
+          # Changed to self.main_layout
+
+
         # Trigger Controls
         trigger_group = QGroupBox("Trigger Controls")
         trigger_layout = QFormLayout()
@@ -534,6 +544,8 @@ class OscilloscopeApp(QMainWindow):
         self.trigger_slope_combo.addItems(["Rising", "Falling"])
         self.trigger_slope_combo.setCurrentText("Rising")  # Rising is standard default
         trigger_layout.addRow("Slope:", self.trigger_slope_combo)
+
+        
         self.trigger_holdoff_spinbox = QDoubleSpinBox()
         self.trigger_holdoff_spinbox.setRange(0, 1000)
         self.trigger_holdoff_spinbox.setValue(0)
@@ -778,35 +790,90 @@ class OscilloscopeApp(QMainWindow):
                                         self.channel_positions, self.horizontal_position)
 
     def process_data(self, data):
-        """Processes incoming data and updates the buffer."""
+        """Process incoming data with trigger handling"""
         try:
-            # Debug: Print the number of channels updated
-            print(f"Data received: {len(data)} channels updated")
+            trigger_source = self.trigger_source_combo.currentIndex()
+            trigger_level = self.trigger_spinbox.value()  # Changed from trigger_level_spin to trigger_spinbox
+            trigger_mode = self.trigger_mode_combo.currentText()
+            trigger_slope = self.trigger_slope_combo.currentText()
 
-            # Debug: Print first 5 values of each channel
-            for i, channel_data in enumerate(data):
-                print(f"Channel {i+1} data: {channel_data[:5]}... (first 5 values)")
+            # Update pre-trigger buffer
+            if data[trigger_source]:
+                self.pre_trigger_buffer.extend(data[trigger_source])
+                max_pretrigger = int(self.display_window * 2)
+                if len(self.pre_trigger_buffer) > max_pretrigger:
+                    self.pre_trigger_buffer = self.pre_trigger_buffer[-max_pretrigger:]
 
-            # Step 1: Update the data buffer
-            self.data_buffer = data
+            # Check trigger condition
+            if self.trigger_state == "Armed" and trigger_mode != "Auto":
+                triggered, trigger_idx = self.check_trigger_condition(
+                    self.pre_trigger_buffer,
+                    trigger_level,
+                    trigger_slope
+                )
 
-            # Step 2: Apply buffer size limits (to prevent excessive memory usage)
-            max_buffer_size = 100000  # Example: Limit buffer size to 100k points
-            for i in range(len(self.data_buffer)):
-                if len(self.data_buffer[i]) > max_buffer_size:
-                    print(f"Channel {i+1} buffer exceeded {max_buffer_size} points. Truncating to latest {max_buffer_size} points.")
-                    self.data_buffer[i] = self.data_buffer[i][-max_buffer_size:]
+                if triggered:
+                    self.trigger_state = "Triggered"
+                    self.last_trigger_index = trigger_idx
+                    
+                    if trigger_mode == "Single":
+                        self.stop_acquisition()
 
-            # Step 3: Reset the plot_updated flag
-            self.plot_updated = False  # Mark the plot as needing an update
+            # Update display data
+            if self.trigger_state == "Triggered" and self.last_trigger_index is not None:
+                start_idx = max(0, self.last_trigger_index - int(self.display_window * self.trigger_position))
+                end_idx = start_idx + self.display_window
+                
+                display_data = self.pre_trigger_buffer[start_idx:end_idx]
+                self.data_buffer[trigger_source] = display_data
+            else:
+                self.data_buffer = data
 
-            # Step 4: Trigger the plot update
+            # Update plot
             self.update_plot()
 
         except Exception as e:
-            print(f"Error in process_data: {e}")
+            print(f"Error in process_data: {str(e)}")
 
+    def check_trigger_condition(self, data, trigger_level, slope):
+        """Check if trigger condition is met"""
+        if len(data) < 2:
+            return False, None
 
+        # Apply hysteresis
+        high_level = trigger_level + (self.volt_div_spinbox.value() * self.trigger_hysteresis)
+        low_level = trigger_level - (self.volt_div_spinbox.value() * self.trigger_hysteresis)
+
+        for i in range(1, len(data)):
+            prev_val = data[i-1]
+            curr_val = data[i]
+
+            if slope == "Rising" and prev_val <= low_level and curr_val >= high_level:
+                return True, i
+            elif slope == "Falling" and prev_val >= high_level and curr_val <= low_level:
+                return True, i
+
+        return False, None
+
+    def update_trigger(self):
+        """Handle trigger parameter updates"""
+        if not self.is_running:
+            return
+
+        # Reset trigger state
+        self.trigger_state = "Armed"
+        self.last_trigger_index = None
+        
+        # Clear pre-trigger buffer when settings change
+        self.pre_trigger_buffer = []
+        
+        # Force plot update
+        self.update_plot()
+
+    def update_trigger_position(self, value):
+        """Update trigger position on screen"""
+        self.trigger_position = value / 100.0
+        self.update_plot()
 
     def change_time_division(self, delta):
         """Handle time/division changes with validation"""
@@ -997,3 +1064,4 @@ if __name__ == '__main__':
     window = OscilloscopeApp()
     window.show()
     sys.exit(app.exec())
+
