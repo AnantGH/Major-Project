@@ -32,7 +32,7 @@ class SerialReader(QThread):
     def load_data(self):
         """Load data from the CSV file"""
         try:
-            data = np.loadtxt('data.csv', delimiter=',', dtype=float)
+            data = np.loadtxt('data1.csv', delimiter=',', dtype=float)
             print("Loading data from data1.csv...")
             
             # Verify data structure
