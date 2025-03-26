@@ -179,6 +179,28 @@ class PlotWindow(QMainWindow):
         
         print("Grid constructed successfully")
         
+        # Add trigger indicator attribute
+        self.trigger_line = None
+        
+    def add_trigger_indicator(self, level, color='#FF0000'):
+        """Add or update horizontal line indicating trigger level"""
+        try:
+            # Remove existing trigger line if it exists
+            if self.trigger_line is not None:
+                self.plot_widget.removeItem(self.trigger_line)
+                
+            # Create new trigger line
+            self.trigger_line = pg.InfiniteLine(
+                pos=level, 
+                angle=0, 
+                pen=pg.mkPen(color=color, width=1, style=Qt.PenStyle.DashLine),
+                movable=False
+            )
+            self.plot_widget.addItem(self.trigger_line)
+            
+        except Exception as e:
+            print(f"Error adding trigger indicator: {str(e)}")
+        
     def zoom_in(self):
         """Zoom in by scaling the view."""
         self.view_box.scaleBy((0.5, 0.5))
@@ -206,8 +228,15 @@ class PlotWindow(QMainWindow):
                     y_values = np.array(data_buffer[i]) / probe_attenuation
                     num_points = len(y_values)
                     
-                    # Create time values scaled by time_div
-                    x_values = np.linspace(0, total_time, len(y_values))  # Scale time axis based on time_div
+                    # Create time values centered around horizontal position
+                    x_values = np.linspace(
+                        -time_div * 5,  # Start at -5 divisions
+                        time_div * 5,   # End at +5 divisions
+                        num_points      # Same number of points as y_values
+                    )
+                    
+                    # Shift based on horizontal position
+                    x_values += horizontal_position * time_div
                     
                     # Apply vertical offset
                     y_values += channel_positions[i] * voltage_div
@@ -215,23 +244,30 @@ class PlotWindow(QMainWindow):
                     # Update the trace
                     trace.setData(x_values, y_values)
                     
-                    print(f"Channel {i+1}: Plotting {len(y_values)} points over {total_time}s")
+                    print(f"Channel {i+1}: Plotting {len(y_values)} points")
+                    print(f"Time range: {x_values[0]:.6f}s to {x_values[-1]:.6f}s")
 
-            # Set X axis range based on time/div and horizontal position
+            # Set X axis range
             x_min = -time_div * 5 + horizontal_position * time_div
             x_max = time_div * 5 + horizontal_position * time_div
             self.plot_widget.setXRange(x_min, x_max)
             
             # Set Y axis range for voltage
-            self.plot_widget.setYRange(-4 * voltage_div, 4 * voltage_div)
+            y_range = 4 * voltage_div  # 4 divisions up and down
+            self.plot_widget.setYRange(-y_range, y_range)
             
-            print(f"Plot ranges set - Time: {x_min} to {x_max}s")
+            # Update grid
+            self.plot_widget.getAxis('bottom').setScale(time_div)
+            self.plot_widget.getAxis('left').setScale(voltage_div)
+            
+            print(f"Plot ranges set - Time: {x_min:.6f}s to {x_max:.6f}s")
+            print(f"Voltage range: {-y_range:.3f}V to {y_range:.3f}V")
             print("Plot update completed successfully")
-            print(f"Time Division: {time_div}s/div")
-            print(f"X-Axis Range: {x_min}s to {x_max}s")
 
         except Exception as e:
-            print(f"Error updating plot: {e}")
+            print(f"Error updating plot: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
 
 class OscilloscopeApp(QMainWindow):
@@ -262,6 +298,7 @@ class OscilloscopeApp(QMainWindow):
         self.trigger_hysteresis = 0.1  # 10% of vertical division
         self.trigger_position = 0.5  # Default trigger position (center of screen)
         self.last_trigger_index = None
+        self.last_trigger_time = 0  # Add this line for holdoff tracking
 
     def initUI(self):
         self.setStyleSheet("""
@@ -525,31 +562,70 @@ class OscilloscopeApp(QMainWindow):
         # Trigger Controls
         trigger_group = QGroupBox("Trigger Controls")
         trigger_layout = QFormLayout()
+        
         self.trigger_spinbox = QDoubleSpinBox()
-        self.trigger_spinbox.setRange(-5000, 5000)  # Allow negative values
-        self.trigger_spinbox.setValue(0)  # Standard default is 0V
-        trigger_layout.addRow("Trigger Level:", self.trigger_spinbox)
+        self.trigger_spinbox.setRange(-5000, 5000)
+        self.trigger_spinbox.setValue(0)
+        self.trigger_spinbox.valueChanged.connect(self.update_trigger)
+        trigger_layout.addRow("Trigger Level (mV):", self.trigger_spinbox)
         
         self.trigger_mode_combo = QComboBox()
         self.trigger_mode_combo.addItems(["Auto", "Normal", "Single"])
-        self.trigger_mode_combo.setCurrentText("Auto")  # Auto is standard default
+        self.trigger_mode_combo.setCurrentText("Auto")
+        self.trigger_mode_combo.currentTextChanged.connect(self.update_trigger)
         trigger_layout.addRow("Mode:", self.trigger_mode_combo)
         
         self.trigger_source_combo = QComboBox()
         self.trigger_source_combo.addItems(["CH1", "CH2", "CH3", "CH4", "External"])
-        self.trigger_source_combo.setCurrentText("CH1")  # CH1 is standard default
+        self.trigger_source_combo.setCurrentText("CH1")
+        self.trigger_source_combo.currentTextChanged.connect(self.update_trigger)
         trigger_layout.addRow("Source:", self.trigger_source_combo)
         
         self.trigger_slope_combo = QComboBox()
         self.trigger_slope_combo.addItems(["Rising", "Falling"])
-        self.trigger_slope_combo.setCurrentText("Rising")  # Rising is standard default
+        self.trigger_slope_combo.setCurrentText("Rising")
+        self.trigger_slope_combo.currentTextChanged.connect(self.update_trigger)
         trigger_layout.addRow("Slope:", self.trigger_slope_combo)
-
+        
+        # Add trigger position slider
+        self.trigger_pos_slider = QSlider(Qt.Orientation.Horizontal)
+        self.trigger_pos_slider.setRange(0, 100)
+        self.trigger_pos_slider.setValue(50)  # Center position
+        self.trigger_pos_slider.valueChanged.connect(self.update_trigger_position)
+        self.trigger_pos_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: none;
+                height: 6px;
+                background: #334155;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: white;
+                border: 1px solid #60a5fa;
+                width: 18px;
+                height: 18px;
+                margin: -6px 0;
+                border-radius: 9px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #e2e8f0;
+                border-color: #3b82f6;
+            }
+            QSlider::add-page:horizontal {
+                background: #475569;
+            }
+            QSlider::sub-page:horizontal {
+                background: #3b82f6;
+            }
+        """)
+        trigger_layout.addRow("Trigger Position:", self.trigger_pos_slider)
         
         self.trigger_holdoff_spinbox = QDoubleSpinBox()
         self.trigger_holdoff_spinbox.setRange(0, 1000)
         self.trigger_holdoff_spinbox.setValue(0)
+        self.trigger_holdoff_spinbox.valueChanged.connect(self.update_trigger)
         trigger_layout.addRow("Holdoff (ms):", self.trigger_holdoff_spinbox)
+        
         trigger_group.setLayout(trigger_layout)
         self.main_layout.addWidget(trigger_group)
 
@@ -792,11 +868,18 @@ class OscilloscopeApp(QMainWindow):
     def process_data(self, data):
         """Process incoming data with trigger handling"""
         try:
+            # Get trigger parameters
             trigger_source = self.trigger_source_combo.currentIndex()
-            trigger_level = self.trigger_spinbox.value()  # Changed from trigger_level_spin to trigger_spinbox
+            trigger_level = self.trigger_spinbox.value() / 1000
             trigger_mode = self.trigger_mode_combo.currentText()
             trigger_slope = self.trigger_slope_combo.currentText()
-
+            trigger_holdoff = self.trigger_holdoff_spinbox.value() / 1000  # Convert ms to seconds
+            
+            # Check holdoff period
+            current_time = time.time()
+            if current_time - self.last_trigger_time < trigger_holdoff:
+                return  # Skip processing during holdoff
+            
             # Update pre-trigger buffer
             if data[trigger_source]:
                 self.pre_trigger_buffer.extend(data[trigger_source])
@@ -815,13 +898,16 @@ class OscilloscopeApp(QMainWindow):
                 if triggered:
                     self.trigger_state = "Triggered"
                     self.last_trigger_index = trigger_idx
+                    self.last_trigger_time = current_time  # Update last trigger time
                     
                     if trigger_mode == "Single":
                         self.stop_acquisition()
 
-            # Update display data
+            # Update display data based on trigger position
+            trigger_position = self.trigger_pos_slider.value() / 100.0  # Convert to 0-1 range
+            
             if self.trigger_state == "Triggered" and self.last_trigger_index is not None:
-                start_idx = max(0, self.last_trigger_index - int(self.display_window * self.trigger_position))
+                start_idx = max(0, self.last_trigger_index - int(self.display_window * trigger_position))
                 end_idx = start_idx + self.display_window
                 
                 display_data = self.pre_trigger_buffer[start_idx:end_idx]
@@ -859,21 +945,46 @@ class OscilloscopeApp(QMainWindow):
         """Handle trigger parameter updates"""
         if not self.is_running:
             return
-
-        # Reset trigger state
-        self.trigger_state = "Armed"
-        self.last_trigger_index = None
-        
-        # Clear pre-trigger buffer when settings change
-        self.pre_trigger_buffer = []
-        
-        # Force plot update
-        self.update_plot()
+            
+        try:
+            # Reset trigger state
+            self.trigger_state = "Armed"
+            self.last_trigger_index = None
+            
+            # Clear pre-trigger buffer
+            self.pre_trigger_buffer = []
+            
+            # Update trigger level indicator
+            if self.plot_window:
+                self.plot_window.add_trigger_indicator(self.trigger_spinbox.value() / 1000)
+            
+            # Force plot update
+            self.update_plot()
+            
+        except Exception as e:
+            print(f"Error updating trigger: {str(e)}")
 
     def update_trigger_position(self, value):
-        """Update trigger position on screen"""
-        self.trigger_position = value / 100.0
-        self.update_plot()
+        """Update trigger position and redraw waveform"""
+        try:
+            self.trigger_position = value / 100.0  # Convert slider value to 0-1 range
+            
+            # Update trigger indicator position if plot window exists
+            if self.plot_window and hasattr(self, 'pre_trigger_buffer') and self.last_trigger_index is not None:
+                # Calculate new display window based on trigger position
+                start_idx = max(0, self.last_trigger_index - int(self.display_window * self.trigger_position))
+                end_idx = start_idx + self.display_window
+                
+                if len(self.pre_trigger_buffer) > 0:
+                    # Update display data
+                    display_data = self.pre_trigger_buffer[start_idx:min(end_idx, len(self.pre_trigger_buffer))]
+                    self.data_buffer[self.trigger_source_combo.currentIndex()] = display_data
+                    
+                    # Force plot update
+                    self.update_plot()
+                    
+        except Exception as e:
+            print(f"Error updating trigger position: {str(e)}")
 
     def change_time_division(self, delta):
         """Handle time/division changes with validation"""
