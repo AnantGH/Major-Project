@@ -1160,19 +1160,17 @@ class OscilloscopeApp(QMainWindow):
         elif attenuation_str == "10x":
             self.probe_attenuation = 10.0
 
-        self.update_data()
+        # No need to modify data, just update the plot
         self.update_plot()
 
     def update_data(self):
-        # Apply probe attenuation to the data buffer
-        for i in range(len(self.data_buffer)):
-            if self.channel_active[i]:
-                self.data_buffer[i] = [value / self.probe_attenuation for value in self.data_buffer[i]]
+        # We don't need to apply probe attenuation here
+        # The attenuation is applied during plotting in PlotWindow.update_plot
+        pass
 
-    
+
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = OscilloscopeApp()
     window.show()
     sys.exit(app.exec())
-
