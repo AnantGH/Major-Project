@@ -228,15 +228,16 @@ class PlotWindow(QMainWindow):
                     y_values = np.array(data_buffer[i]) / probe_attenuation
                     num_points = len(y_values)
                     
-                    # Create time values centered around horizontal position
+                    # Create time values WITHOUT horizontal position adjustment
+                    # This keeps the waveform at its absolute position
                     x_values = np.linspace(
                         -time_div * 5,  # Start at -5 divisions
                         time_div * 5,   # End at +5 divisions
                         num_points      # Same number of points as y_values
                     )
                     
-                    # Shift based on horizontal position
-                    x_values += horizontal_position * time_div
+                    # Remove the horizontal position shift from here
+                    # x_values += horizontal_position * time_div
                     
                     # Apply vertical offset
                     y_values += channel_positions[i] * voltage_div
@@ -247,7 +248,9 @@ class PlotWindow(QMainWindow):
                     print(f"Channel {i+1}: Plotting {len(y_values)} points")
                     print(f"Time range: {x_values[0]:.6f}s to {x_values[-1]:.6f}s")
 
-            # Set X axis range
+            # Set X axis range - THIS is where we apply the horizontal position
+            # to move the viewport/grid, which makes the waveform appear to move
+            # in the opposite direction
             x_min = -time_div * 5 + horizontal_position * time_div
             x_max = time_div * 5 + horizontal_position * time_div
             self.plot_widget.setXRange(x_min, x_max)
