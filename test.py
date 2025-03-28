@@ -401,10 +401,10 @@ class OscilloscopeApp(QMainWindow):
                 border-color: #2563eb;
             }
             QSlider::add-page:horizontal {
-                background: #555;
+                background: #475569;
             }
             QSlider::sub-page:horizontal {
-                background: #777;
+                background: #3b82f6;
             }
             QCheckBox {
                 spacing: 8px;
@@ -464,6 +464,12 @@ class OscilloscopeApp(QMainWindow):
         self.fft_layout = QVBoxLayout()
         self.main_tab.setLayout(self.main_layout)
         self.fft_tab.setLayout(self.fft_layout)
+
+        # FFT Analysis tab setup
+        self.setup_fft_tab()
+        
+        # Connect tab change signal to update FFT when tab is selected
+        self.tabs.currentChanged.connect(self.on_tab_changed)
 
         # Connectivity Controls
         connectivity_group = QGroupBox("Connectivity")
@@ -727,6 +733,93 @@ class OscilloscopeApp(QMainWindow):
         scroll.setWidget(control_widget)
         main_layout.addWidget(scroll)
 
+    def setup_fft_tab(self):
+        """Set up the FFT Analysis tab with controls and plot"""
+        print("Setting up FFT tab")
+        # Main layout structure
+        fft_controls_layout = QHBoxLayout()
+        
+        # Left side - Controls
+        controls_group = QGroupBox("FFT Controls")
+        controls_layout = QFormLayout()
+        
+        # FFT Size control
+        self.fft_size_combo = QComboBox()
+        self.fft_size_combo.addItems(["256", "512", "1024", "2048", "4096", "8192"])
+        self.fft_size_combo.setCurrentText("1024")  # Default size
+        self.fft_size_combo.currentTextChanged.connect(self.update_fft)
+        controls_layout.addRow("FFT Size:", self.fft_size_combo)
+        
+        # Window function control
+        self.window_func_combo = QComboBox()
+        self.window_func_combo.addItems(["Rectangular", "Hanning", "Hamming", "Blackman", "Flat-top"])
+        self.window_func_combo.setCurrentText("Hanning")  # Default window
+        self.window_func_combo.currentTextChanged.connect(self.update_fft)
+        controls_layout.addRow("Window:", self.window_func_combo)
+        
+        # Scale control
+        self.fft_scale_combo = QComboBox()
+        self.fft_scale_combo.addItems(["Linear", "Logarithmic (dB)"])
+        self.fft_scale_combo.setCurrentText("Logarithmic (dB)")  # Default
+        self.fft_scale_combo.currentTextChanged.connect(self.update_fft)
+        controls_layout.addRow("Scale:", self.fft_scale_combo)
+        
+        # Channel selection
+        self.fft_channel_combo = QComboBox()
+        self.fft_channel_combo.addItems(["CH1", "CH2", "CH3", "CH4"])
+        self.fft_channel_combo.currentIndexChanged.connect(self.update_fft)
+        controls_layout.addRow("Source:", self.fft_channel_combo)
+        
+        # Update button
+        self.update_fft_button = QPushButton("Update FFT")
+        self.update_fft_button.clicked.connect(self.update_fft)
+        controls_layout.addRow(self.update_fft_button)
+        
+        # Information display
+        self.fft_info_label = QLabel("Peak: N/A")
+        controls_layout.addRow(self.fft_info_label)
+        
+        controls_group.setLayout(controls_layout)
+        fft_controls_layout.addWidget(controls_group)
+        
+        # Right side - FFT Plot
+        self.fft_plot_widget = pg.PlotWidget()
+        self.fft_plot_widget.setBackground('#000A1E')
+        self.fft_plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        self.fft_plot_widget.setLabel('left', 'Magnitude')
+        self.fft_plot_widget.setLabel('bottom', 'Frequency', 'Hz')
+        self.fft_plot_widget.setTitle("FFT Spectrum Analysis")
+        
+        # Set minimum size to ensure visibility
+        self.fft_plot_widget.setMinimumSize(500, 300)
+        
+        # Create FFT plot curve
+        self.fft_curve = self.fft_plot_widget.plot([], [], pen=pg.mkPen(color="#00FF00", width=2))
+        
+        # Add peak markers
+        self.fft_peaks = []  # Will store peak markers
+        
+        fft_controls_layout.addWidget(self.fft_plot_widget, stretch=3)  # Give plot more space
+        
+        # Add the controls and plot to the main FFT layout
+        self.fft_layout.addLayout(fft_controls_layout)
+        
+        # Add explanation text
+        fft_info_text = QLabel(
+            "FFT (Fast Fourier Transform) converts a signal from the time domain to the frequency domain, "
+            "showing the frequency components present in the signal. This is useful for analyzing "
+            "harmonics, noise, and frequency response."
+        )
+        fft_info_text.setWordWrap(True)
+        self.fft_layout.addWidget(fft_info_text)
+
+    def on_tab_changed(self, index):
+        """Handle tab switching"""
+        if index == 1:  # FFT tab
+            print("FFT tab selected, updating display")
+            # Force FFT update when switching to FFT tab
+            self.update_fft()
+
     def toggle_channel(self, channel_idx, state):
         if channel_idx == 0:  # Only allow Channel 1 to be toggled
             self.channel_active[channel_idx] = bool(state)
@@ -805,9 +898,16 @@ class OscilloscopeApp(QMainWindow):
                     print(f"DEBUG: Buffer length: {len(adjusted_buffer)}")
                     print(f"DEBUG: sample_rate: {self.sample_rate}, display_window: {self.display_window}")
                     
-                    # Update frequency measurement
-                    freq = self.calculate_frequency(adjusted_buffer)
-                    print(f"DEBUG: Calculated frequency: {freq} Hz")
+                    # Calculate frequency using both methods
+                    freq_zc = self.calculate_frequency(adjusted_buffer)  # Zero-crossing method
+                    freq_fft = self.calculate_frequency_fft(adjusted_buffer)  # FFT method
+                    
+                    # Use the FFT result if available, otherwise fall back to zero-crossing method
+                    freq = freq_fft if freq_fft > 0 else freq_zc
+                    
+                    print(f"DEBUG: Zero-crossing freq: {freq_zc:.2f} Hz, FFT freq: {freq_fft:.2f} Hz")
+                    print(f"DEBUG: Final frequency: {freq:.2f} Hz")
+                    
                     if freq > 0:
                         self.measure_freq.setText(f"Frequency: {freq:.2f} Hz")
                     else:
@@ -837,6 +937,10 @@ class OscilloscopeApp(QMainWindow):
                 self.probe_attenuation
             )
             print("Plot update completed successfully.")
+            
+            # Update FFT display if the FFT tab is active
+            if self.tabs.currentIndex() == 1:  # FFT tab
+                self.update_fft()
         else:
             print("Data buffer is empty or invalid. Skipping plot update.")
 
@@ -879,6 +983,43 @@ class OscilloscopeApp(QMainWindow):
             print("DEBUG: Not enough crossings for frequency calculation")
             return 0
 
+    def calculate_frequency_fft(self, buffer):
+        """Calculate frequency using FFT for more reliable results"""
+        if len(buffer) < 20:  # Need enough points for reliable calculation
+            return 0
+            
+        try:
+            # Use numpy's FFT for more reliable frequency detection
+            # First, convert buffer to numpy array if it's not already
+            signal = np.array(buffer)
+            
+            # Apply Hanning window to reduce spectral leakage
+            signal = signal * np.hanning(len(signal))
+            
+            # Compute FFT and get the magnitude spectrum
+            fft_result = np.abs(np.fft.rfft(signal))
+            
+            # Use a reasonable default if sample_rate is too small or invalid
+            effective_sample_rate = max(100, self.sample_rate)
+            
+            # Compute frequency bins
+            freq_bins = np.fft.rfftfreq(len(signal), d=1.0/effective_sample_rate)
+            
+            # Find the peak frequency (excluding DC component)
+            if len(freq_bins) > 1:
+                # Skip the first bin (DC component) by starting at index 1
+                peak_idx = np.argmax(fft_result[1:]) + 1
+                peak_freq = freq_bins[peak_idx]
+                
+                # Only return frequency if the peak is significant
+                if fft_result[peak_idx] > 0.1 * np.max(fft_result):
+                    return peak_freq
+            
+            return 0
+        except Exception as e:
+            print(f"ERROR in FFT frequency calculation: {str(e)}")
+            return 0
+
     def calculate_rms(self, buffer):
         """Calculate RMS voltage"""
         if not buffer:
@@ -919,7 +1060,6 @@ class OscilloscopeApp(QMainWindow):
         if self.plot_window:
             self.timer.start(50)
             print("Plot update timer started.")
-
 
     def stop_acquisition(self):
         if self.serial_thread:
@@ -985,7 +1125,11 @@ class OscilloscopeApp(QMainWindow):
 
             # Update plot
             self.update_plot()
-
+            
+            # Force FFT update when new data arrives if FFT tab is visible
+            if self.tabs.currentIndex() == 1:  # FFT tab is active
+                self.update_fft()
+                
         except Exception as e:
             print(f"Error in process_data: {str(e)}")
 
@@ -1175,38 +1319,11 @@ class OscilloscopeApp(QMainWindow):
             trace.setPen(pg.mkPen(color=color, width=2))
         self.update_plot()
 
-    def record_data(self):
-        filename, _ = QFileDialog.getSaveFileName(self, "Save Waveform Data", "", "CSV Files (*.csv);;All Files (*)")
-        if filename:
-            if not filename.endswith('.csv'):
-                filename += '.csv'
-            try:
-                max_length = max(len(buffer) for buffer in self.data_buffer if buffer)
-                if max_length == 0:
-                    with open(filename, 'w') as file:
-                        file.write("No data available\n")
-                    return
+    def update_data(self):
+        # We don't need to apply probe attenuation here
+        # The attenuation is applied during plotting in PlotWindow.update_plot
+        pass
 
-                data_dict = {}
-                for i, buffer in enumerate(self.data_buffer):
-                    if self.channel_active[i]:
-                        data_dict[f"Channel {i+1}"] = buffer + [0.0] * (max_length - len(buffer)) if buffer else [0.0] * max_length
-
-                if not data_dict:
-                    with open(filename, 'w') as file:
-                        file.write("No active channels have data\n")
-                    return
-
-                df = pd.DataFrame(data_dict)
-                df.to_csv(filename, index_label="Sample")
-            except PermissionError:
-                pass
-            except Exception:
-                pass
-
-    def toggle_grid(self, state):
-        if self.plot_window:
-            self.plot_window.plot_widget.showGrid(x=state, y=state, alpha=0.3)
 
     def update_impedance(self, index):
         impedance_str = self.impedance_combo.currentText()
@@ -1250,11 +1367,175 @@ class OscilloscopeApp(QMainWindow):
         # No need to modify data, just update the plot
         self.update_plot()
 
-    def update_data(self):
-        # We don't need to apply probe attenuation here
-        # The attenuation is applied during plotting in PlotWindow.update_plot
-        pass
+    def record_data(self):
+        filename, _ = QFileDialog.getSaveFileName(self, "Save Waveform Data", "", "CSV Files (*.csv);;All Files (*)")
+        if filename:
+            if not filename.endswith('.csv'):
+                filename += '.csv'
+            try:
+                max_length = max(len(buffer) for buffer in self.data_buffer if buffer)
+                if max_length == 0:
+                    with open(filename, 'w') as file:
+                        file.write("No data available\n")
+                    return
 
+                data_dict = {}
+                for i, buffer in enumerate(self.data_buffer):
+                    if self.channel_active[i]:
+                        data_dict[f"Channel {i+1}"] = buffer + [0.0] * (max_length - len(buffer)) if buffer else [0.0] * max_length
+
+                if not data_dict:
+                    with open(filename, 'w') as file:
+                        file.write("No active channels have data\n")
+                    return
+
+                df = pd.DataFrame(data_dict)
+                df.to_csv(filename, index_label="Sample")
+            except PermissionError:
+                pass
+            except Exception:
+                pass
+
+    def toggle_grid(self, state):
+        if self.plot_window:
+            self.plot_window.plot_widget.showGrid(x=state, y=state, alpha=0.3)
+
+    def update_channel_coupling(self, channel, mode):
+        """Update channel coupling mode"""
+        if channel < len(self.coupling_combos):
+            self.coupling_combos[channel].setCurrentText(mode)
+            if self.serial_thread:
+                self.serial_thread.set_channel_coupling(channel, mode)
+
+    def update_fft(self):
+        """Update the FFT display based on current settings and data"""
+        print("Updating FFT display...")
+        channel_idx = self.fft_channel_combo.currentIndex()
+        
+        # Check if selected channel has data
+        if not self.channel_active[channel_idx] or not self.data_buffer[channel_idx]:
+            print(f"No data for channel {channel_idx+1}")
+            self.fft_curve.setData([], [])
+            self.fft_info_label.setText("Peak: N/A")
+            # Clear any peak markers
+            for peak in self.fft_peaks:
+                self.fft_plot_widget.removeItem(peak)
+            self.fft_peaks = []
+            return
+        
+        try:
+            # Get the raw signal data with probe attenuation applied
+            signal = np.array(self.data_buffer[channel_idx]) / self.probe_attenuation
+            print(f"Processing FFT for channel {channel_idx+1}, buffer length: {len(signal)}")
+            
+            # Get FFT size
+            fft_size = int(self.fft_size_combo.currentText())
+            
+            # If signal is shorter than FFT size, pad with zeros
+            if len(signal) < fft_size:
+                signal = np.pad(signal, (0, fft_size - len(signal)), 'constant')
+            
+            # If signal is longer than FFT size, truncate
+            if len(signal) > fft_size:
+                signal = signal[:fft_size]
+            
+            # Apply selected window function
+            window_type = self.window_func_combo.currentText().lower()
+            if window_type == "rectangular":
+                windowed_signal = signal
+            elif window_type == "hanning":
+                windowed_signal = signal * np.hanning(len(signal))
+            elif window_type == "hamming":
+                windowed_signal = signal * np.hamming(len(signal))
+            elif window_type == "blackman":
+                windowed_signal = signal * np.blackman(len(signal))
+            elif window_type == "flat-top":
+                windowed_signal = signal * np.ones(len(signal))  # Simplified flat-top
+            else:
+                windowed_signal = signal * np.hanning(len(signal))  # Default to Hanning
+            
+            # Compute FFT and magnitude
+            fft_result = np.fft.rfft(windowed_signal)
+            magnitude = np.abs(fft_result)
+            
+            # Convert to dB if logarithmic scale is selected
+            if self.fft_scale_combo.currentText() == "Logarithmic (dB)":
+                # Avoid log of zero by adding small value
+                magnitude = 20 * np.log10(magnitude + 1e-10)
+                y_label = "Magnitude (dB)"
+            else:
+                y_label = "Magnitude"
+            
+            # Set Y-axis label based on scale
+            self.fft_plot_widget.setLabel('left', y_label)
+            
+            # Calculate frequency bins
+            effective_sample_rate = max(100, self.sample_rate)
+            freq_bins = np.fft.rfftfreq(len(signal), d=1.0/effective_sample_rate)
+            
+            # Update the plot
+            print(f"Plotting FFT with {len(freq_bins)} frequency bins")
+            self.fft_curve.setData(freq_bins, magnitude)
+            
+            # Find and mark peaks
+            peak_indices = self.find_peaks(magnitude)
+            
+            # Clear previous peak markers
+            for peak in self.fft_peaks:
+                self.fft_plot_widget.removeItem(peak)
+            self.fft_peaks = []
+            
+            # Add new peak markers and update peak info
+            if peak_indices:
+                main_peak_idx = peak_indices[0]  # Index of highest peak
+                peak_freq = freq_bins[main_peak_idx]
+                peak_mag = magnitude[main_peak_idx]
+                
+                print(f"Main peak found at {peak_freq:.2f} Hz")
+                
+                # Create peak marker
+                peak_marker = pg.ScatterPlotItem()
+                peak_marker.addPoints([{'pos': (peak_freq, peak_mag), 'size': 10, 'pen': {'color': 'red', 'width': 2}, 'brush': pg.mkBrush('r')}])
+                self.fft_plot_widget.addItem(peak_marker)
+                self.fft_peaks.append(peak_marker)
+                
+                # Add text label for peak
+                peak_text = pg.TextItem(text=f"{peak_freq:.2f} Hz", color=(255, 0, 0))
+                peak_text.setPos(peak_freq, peak_mag)
+                self.fft_plot_widget.addItem(peak_text)
+                self.fft_peaks.append(peak_text)
+                
+                # Update info label
+                self.fft_info_label.setText(f"Peak: {peak_freq:.2f} Hz")
+            else:
+                self.fft_info_label.setText("Peak: N/A")
+                
+        except Exception as e:
+            print(f"Error updating FFT: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def find_peaks(self, magnitude, num_peaks=3, min_distance=5):
+        """Find peaks in FFT magnitude data"""
+        # Skip first few bins to avoid DC component
+        start_idx = 3
+        # Find peaks excluding the start
+        if len(magnitude) <= start_idx:
+            return []
+            
+        # Simple peak detection - find local maxima
+        peak_indices = []
+        for i in range(start_idx + 1, len(magnitude) - 1):
+            if magnitude[i] > magnitude[i-1] and magnitude[i] > magnitude[i+1]:
+                peak_indices.append((i, magnitude[i]))  # Store index and value
+        
+        # Sort by magnitude (descending)
+        peak_indices.sort(key=lambda x: x[1], reverse=True)
+        
+        # Extract just the indices of top peaks
+        top_peaks = [idx for idx, _ in peak_indices[:num_peaks]]
+        
+        return top_peaks
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
