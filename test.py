@@ -796,6 +796,34 @@ class OscilloscopeApp(QMainWindow):
             print("Starting plot update...")
             print(f"Buffer data sample (channel 1): {self.data_buffer[0][:5]}")
 
+            # Calculate and update measurements for active channels
+            for ch_idx, buffer in enumerate(self.data_buffer):
+                if self.channel_active[ch_idx] and buffer:
+                    # Adjust buffer for probe attenuation
+                    adjusted_buffer = [v / self.probe_attenuation for v in buffer]
+                    
+                    print(f"DEBUG: Buffer length: {len(adjusted_buffer)}")
+                    print(f"DEBUG: sample_rate: {self.sample_rate}, display_window: {self.display_window}")
+                    
+                    # Update frequency measurement
+                    freq = self.calculate_frequency(adjusted_buffer)
+                    print(f"DEBUG: Calculated frequency: {freq} Hz")
+                    if freq > 0:
+                        self.measure_freq.setText(f"Frequency: {freq:.2f} Hz")
+                    else:
+                        self.measure_freq.setText("Frequency: N/A")
+                    
+                    # Calculate RMS voltage
+                    if adjusted_buffer:
+                        rms = self.calculate_rms(adjusted_buffer)
+                        print(f"DEBUG: Calculated RMS: {rms:.3f} V")
+                        self.measure_rms.setText(f"RMS Voltage: {rms:.3f} V")
+                    else:
+                        self.measure_rms.setText("RMS Voltage: N/A")
+                    
+                    # Only process the first active channel for measurements
+                    break
+
             # Call the plot window's update method
             self.plot_window.update_plot(
                 self.data_buffer,
@@ -812,16 +840,53 @@ class OscilloscopeApp(QMainWindow):
         else:
             print("Data buffer is empty or invalid. Skipping plot update.")
 
-
-
     def calculate_frequency(self, buffer):
-        if len(buffer) < 2:
+        """Calculate frequency using a more robust method that works with DC offset"""
+        if len(buffer) < 10:  # Need enough points for reliable calculation
+            print("DEBUG: Not enough points for frequency calculation")
             return 0
+            
+        # Calculate mean of the signal to handle DC offset
+        mean_value = sum(buffer) / len(buffer)
+        print(f"DEBUG: Signal mean value: {mean_value}")
+        
+        # Normalize signal by removing DC offset
+        normalized_buffer = [val - mean_value for val in buffer]
+        
+        # Count zero crossings in the normalized buffer
         crossings = 0
-        for i in range(1, min(len(buffer), self.display_window)):
-            if (buffer[i-1] < 0 and buffer[i] >= 0) or (buffer[i-1] > 0 and buffer[i] <= 0):
+        for i in range(1, min(len(normalized_buffer), self.display_window)):
+            if (normalized_buffer[i-1] < 0 and normalized_buffer[i] >= 0) or \
+               (normalized_buffer[i-1] > 0 and normalized_buffer[i] <= 0):
                 crossings += 1
-        return crossings / (self.display_window * (1000 / self.sample_rate) / 1000.0) / 2.0
+        
+        print(f"DEBUG: Zero crossings detected: {crossings}")
+                
+        # Use a reasonable default if sample_rate is too small or invalid
+        effective_sample_rate = max(100, self.sample_rate)
+        
+        # Calculate time duration of the displayed signal in seconds
+        # Ensure we're using the actual buffer length, not the display window setting
+        actual_time_duration = len(buffer) / effective_sample_rate
+        print(f"DEBUG: Time duration: {actual_time_duration}s with sample rate {effective_sample_rate}")
+        
+        # Each complete cycle has 2 zero crossings
+        if crossings > 1:
+            freq = (crossings / 2) / actual_time_duration
+            print(f"DEBUG: Calculated frequency with formula (crossings/2)/time_duration = {freq} Hz")
+            return freq
+        else:
+            print("DEBUG: Not enough crossings for frequency calculation")
+            return 0
+
+    def calculate_rms(self, buffer):
+        """Calculate RMS voltage"""
+        if not buffer:
+            return 0
+        
+        # Calculate RMS
+        rms = np.sqrt(sum([v**2 for v in buffer]) / len(buffer))
+        return rms
 
     def start_acquisition(self):
         """Start data acquisition and initialize SerialReader if necessary."""
@@ -884,7 +949,7 @@ class OscilloscopeApp(QMainWindow):
                 return  # Skip processing during holdoff
             
             # Update pre-trigger buffer
-            if data[trigger_source]:
+            if data[trigger_source] and len(data[trigger_source]) >= 2:
                 self.pre_trigger_buffer.extend(data[trigger_source])
                 max_pretrigger = int(self.display_window * 2)
                 if len(self.pre_trigger_buffer) > max_pretrigger:
