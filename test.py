@@ -1145,6 +1145,8 @@ class OscilloscopeApp(QMainWindow):
 
     def update_impedance(self, index):
         impedance_str = self.impedance_combo.currentText()
+        old_impedance = self.impedance  # Store previous impedance for scaling
+        
         if impedance_str == "1 MΩ":
             self.impedance = 1e6
         elif impedance_str == "50 Ω":
@@ -1153,7 +1155,24 @@ class OscilloscopeApp(QMainWindow):
         if self.serial_thread:
             self.serial_thread.set_impedance(self.impedance)
 
-        self.update_data()
+        # Apply impedance effect to data buffer
+        # Assuming a source impedance of 600 ohms (typical for audio signals)
+        source_impedance = 600.0
+        
+        # Calculate voltage division factors for old and new impedance
+        old_factor = old_impedance / (old_impedance + source_impedance)
+        new_factor = self.impedance / (self.impedance + source_impedance)
+        
+        # Scale factor to adjust the voltage
+        if old_factor > 0:  # Avoid division by zero
+            scale_factor = new_factor / old_factor
+            
+            # Apply scaling to all active channels
+            for i in range(len(self.data_buffer)):
+                if self.channel_active[i] and self.data_buffer[i]:
+                    self.data_buffer[i] = [value * scale_factor for value in self.data_buffer[i]]
+        
+        # Update plot with the new scaled data
         self.update_plot()
 
     def update_probe_attenuation(self, index):
