@@ -779,6 +779,40 @@ class OscilloscopeApp(QMainWindow):
         self.fft_info_label = QLabel("Peak: N/A")
         controls_layout.addRow(self.fft_info_label)
         
+        # Add zoom controls
+        zoom_layout = QHBoxLayout()
+        self.fft_zoom_in_btn = QPushButton("Zoom In")
+        self.fft_zoom_out_btn = QPushButton("Zoom Out")
+        self.fft_reset_zoom_btn = QPushButton("Reset Zoom")
+        
+        # Set styling for buttons
+        for btn in [self.fft_zoom_in_btn, self.fft_zoom_out_btn, self.fft_reset_zoom_btn]:
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1e293b;
+                    color: #e2e8f0;
+                    border: 1px solid #475569;
+                    border-radius: 4px;
+                    padding: 4px 12px;
+                }
+                QPushButton:hover {
+                    background-color: #334155;
+                }
+                QPushButton:pressed {
+                    background-color: #0f172a;
+                }
+            """)
+        
+        # Connect zoom button signals
+        self.fft_zoom_in_btn.clicked.connect(self.fft_zoom_in)
+        self.fft_zoom_out_btn.clicked.connect(self.fft_zoom_out)
+        self.fft_reset_zoom_btn.clicked.connect(self.fft_reset_zoom)
+        
+        zoom_layout.addWidget(self.fft_zoom_in_btn)
+        zoom_layout.addWidget(self.fft_zoom_out_btn)
+        zoom_layout.addWidget(self.fft_reset_zoom_btn)
+        controls_layout.addRow("Zoom Controls:", zoom_layout)
+        
         controls_group.setLayout(controls_layout)
         fft_controls_layout.addWidget(controls_group)
         
@@ -796,6 +830,12 @@ class OscilloscopeApp(QMainWindow):
         # Create FFT plot curve
         self.fft_curve = self.fft_plot_widget.plot([], [], pen=pg.mkPen(color="#00FF00", width=2))
         
+        # Store viewbox for zoom operations
+        self.fft_view_box = self.fft_plot_widget.getViewBox()
+        
+        # Configure mouse interaction for zooming
+        self.fft_plot_widget.setMouseEnabled(x=True, y=True)  # Enable mouse panning
+        
         # Add peak markers
         self.fft_peaks = []  # Will store peak markers
         
@@ -812,6 +852,15 @@ class OscilloscopeApp(QMainWindow):
         )
         fft_info_text.setWordWrap(True)
         self.fft_layout.addWidget(fft_info_text)
+    
+    def fft_zoom_in(self):
+        self.fft_view_box.scaleBy((0.5, 0.5))
+    
+    def fft_zoom_out(self):
+        self.fft_view_box.scaleBy((2, 2))
+    
+    def fft_reset_zoom(self):
+        self.fft_view_box.autoRange()
 
     def on_tab_changed(self, index):
         """Handle tab switching"""
@@ -1536,6 +1585,27 @@ class OscilloscopeApp(QMainWindow):
         top_peaks = [idx for idx, _ in peak_indices[:num_peaks]]
         
         return top_peaks
+
+    def zoom_in(self):
+        """Zoom in by scaling the view."""
+        if hasattr(self, 'plot_window') and self.plot_window:
+            # Call the PlotWindow's zoom_in method instead of accessing ViewBox directly
+            self.plot_window.zoom_in()
+            print("Main oscilloscope zoomed in")
+
+    def zoom_out(self):
+        """Zoom out by scaling the view."""
+        if hasattr(self, 'plot_window') and self.plot_window:
+            # Call the PlotWindow's zoom_out method instead of accessing ViewBox directly
+            self.plot_window.zoom_out()
+            print("Main oscilloscope zoomed out")
+
+    def reset_zoom(self):
+        """Reset the zoom to the default view."""
+        if hasattr(self, 'plot_window') and self.plot_window:
+            # Call the PlotWindow's reset_zoom method instead of accessing ViewBox directly
+            self.plot_window.reset_zoom()
+            print("Main oscilloscope zoom reset")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
