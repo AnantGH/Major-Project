@@ -1248,25 +1248,10 @@ class OscilloscopeApp(QMainWindow):
             print(f"Error updating trigger position: {str(e)}")
 
     def change_time_division(self, delta):
-        """Handle time/division changes with validation"""
-        try:
-            current_val = self.time_div_spinbox.value()
-            new_val = current_val + delta
-            
-            # Ensure value is within valid range
-            min_val = 1e-9  # 1 ns/div
-            max_val = 1e6   # 1000000 s/div
-            
-            if min_val <= new_val <= max_val:
-                print(f"Changing time/div from {current_val} to {new_val}")
-                self.time_div_spinbox.setValue(new_val)
-                if self.plot_window:
-                    self.update_plot()
-            else:
-                print(f"Invalid time/div value: {new_val}")
-                
-        except Exception as e:
-            print(f"Error changing time division: {e}")
+        new_val = self.time_div_spinbox.value() + delta
+        if 1e-9 <= new_val <= self.time_div_spinbox.maximum():
+            self.time_div_spinbox.setValue(new_val)
+            self.update_plot()
 
     def change_voltage_division(self, delta):
         new_val = self.volt_div_spinbox.value() + delta
