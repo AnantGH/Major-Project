@@ -217,60 +217,41 @@ class PlotWindow(QMainWindow):
                     display_window, sample_rate, channel_positions, horizontal_position, 
                     probe_attenuation):
         try:
-            print("Starting plot update...")
-
-            # Calculate time base parameters
-            total_time = time_div * 10  # Total time window (10 divisions)
-            
             for i, trace in enumerate(self.traces):
                 if channel_active[i] and data_buffer[i]:
-                    # Get data points
-                    y_values = np.array(data_buffer[i]) / probe_attenuation
-                    num_points = len(y_values)
-                    
-                    # Create time values WITHOUT horizontal position adjustment
-                    # This keeps the waveform at its absolute position
-                    x_values = np.linspace(
-                        -time_div * 5,  # Start at -5 divisions
-                        time_div * 5,   # End at +5 divisions
-                        num_points      # Same number of points as y_values
-                    )
-                    
-                    # Remove the horizontal position shift from here
-                    # x_values += horizontal_position * time_div
-                    
-                    # Apply vertical offset
-                    y_values += channel_positions[i] * voltage_div
-                    
+                    # Get raw values for both X and Y
+                    y_values = np.array(data_buffer[i], dtype=np.float32)  # Get raw values
+                    num_points = len(y_values)  # Define num_points here
+                    x_values = np.arange(num_points, dtype=np.float32)  # Get raw values
+
+                    # Apply scaling in the same pattern for both
+                    # Y-values scaling
+                    y_values = y_values / probe_attenuation  # Apply attenuation
+                    y_values = y_values / voltage_div  # Convert to divisions
+                    y_values = y_values + channel_positions[i]  # Add position offset
+
+                    # X-values scaling (matching Y pattern)
+                    x_values = x_values / num_points  # Normalize
+                    x_values = x_values * 8 - 4  # Convert to divisions
+                    x_values = x_values * time_div  # Scale by time/div
+                    x_values = x_values + horizontal_position * time_div  # Add position offset
+
                     # Update the trace
                     trace.setData(x_values, y_values)
                     
-                    print(f"Channel {i+1}: Plotting {len(y_values)} points")
-                    print(f"Time range: {x_values[0]:.6f}s to {x_values[-1]:.6f}s")
+                    # Both X and Y range calculations using the same simplified style
+                    x_range = 4 * time_div
+                    self.plot_widget.setXRange(-x_range, x_range)
 
-            # Set X axis range - THIS is where we apply the horizontal position
-            # to move the viewport/grid, which makes the waveform appear to move
-            # in the opposite direction
-            x_min = -time_div * 5 + horizontal_position * time_div
-            x_max = time_div * 5 + horizontal_position * time_div
-            self.plot_widget.setXRange(x_min, x_max)
-            
-            # Set Y axis range for voltage
-            y_range = 4 * voltage_div  # 4 divisions up and down
-            self.plot_widget.setYRange(-y_range, y_range)
-            
-            # Update grid
-            self.plot_widget.getAxis('bottom').setScale(time_div)
-            self.plot_widget.getAxis('left').setScale(voltage_div)
-            
-            print(f"Plot ranges set - Time: {x_min:.6f}s to {x_max:.6f}s")
-            print(f"Voltage range: {-y_range:.3f}V to {y_range:.3f}V")
-            print("Plot update completed successfully")
+                    y_range = 4 * voltage_div
+                    self.plot_widget.setYRange(-y_range, y_range)
+                    
+                    # Update grid scales
+                    self.plot_widget.getAxis('bottom').setScale(time_div)
+                    self.plot_widget.getAxis('left').setScale(voltage_div)
 
         except Exception as e:
             print(f"Error updating plot: {str(e)}")
-            import traceback
-            traceback.print_exc()
 
 
 class OscilloscopeApp(QMainWindow):
@@ -1249,7 +1230,7 @@ class OscilloscopeApp(QMainWindow):
 
     def change_time_division(self, delta):
         new_val = self.time_div_spinbox.value() + delta
-        if 1e-9 <= new_val <= self.time_div_spinbox.maximum():
+        if 0.1 <= new_val <= self.time_div_spinbox.maximum():  # Same style as voltage division
             self.time_div_spinbox.setValue(new_val)
             self.update_plot()
 
@@ -1518,29 +1499,33 @@ class OscilloscopeApp(QMainWindow):
             for peak in self.fft_peaks:
                 self.fft_plot_widget.removeItem(peak)
             self.fft_peaks = []
-            
+
             # Add new peak markers and update peak info
-            if peak_indices:
-                main_peak_idx = peak_indices[0]  # Index of highest peak
+            if len(peak_indices) > 0:
+                # Get the highest peak
+                main_peak_idx = peak_indices[0]
                 peak_freq = freq_bins[main_peak_idx]
                 peak_mag = magnitude[main_peak_idx]
                 
-                print(f"Main peak found at {peak_freq:.2f} Hz")
-                
-                # Create peak marker
+                # Create marker for the peak
                 peak_marker = pg.ScatterPlotItem()
-                peak_marker.addPoints([{'pos': (peak_freq, peak_mag), 'size': 10, 'pen': {'color': 'red', 'width': 2}, 'brush': pg.mkBrush('r')}])
+                peak_marker.addPoints([{
+                    'pos': (peak_freq, peak_mag),
+                    'size': 10,
+                    'pen': {'color': 'red', 'width': 2},
+                    'brush': pg.mkBrush('r')
+                }])
                 self.fft_plot_widget.addItem(peak_marker)
                 self.fft_peaks.append(peak_marker)
                 
-                # Add text label for peak
-                peak_text = pg.TextItem(text=f"{peak_freq:.2f} Hz", color=(255, 0, 0))
+                # Add text label for the peak
+                peak_text = pg.TextItem(text=f"{peak_freq:.1f} Hz", color=(255, 0, 0))
                 peak_text.setPos(peak_freq, peak_mag)
                 self.fft_plot_widget.addItem(peak_text)
                 self.fft_peaks.append(peak_text)
                 
-                # Update info label
-                self.fft_info_label.setText(f"Peak: {peak_freq:.2f} Hz")
+                # Update info label with frequency and magnitude
+                self.fft_info_label.setText(f"Peak: {peak_freq:.1f} Hz @ {peak_mag:.1f}")
             else:
                 self.fft_info_label.setText("Peak: N/A")
                 
@@ -1549,27 +1534,35 @@ class OscilloscopeApp(QMainWindow):
             import traceback
             traceback.print_exc()
     
-    def find_peaks(self, magnitude, num_peaks=3, min_distance=5):
-        """Find peaks in FFT magnitude data"""
-        # Skip first few bins to avoid DC component
-        start_idx = 3
-        # Find peaks excluding the start
-        if len(magnitude) <= start_idx:
-            return []
+    def find_peaks(self, magnitude, num_peaks=3, min_height=None):
+        """Find peaks in FFT magnitude data with improved detection"""
+        try:
+            # Skip first few bins to avoid DC component
+            start_idx = 3
+            if len(magnitude) <= start_idx:
+                return []
             
-        # Simple peak detection - find local maxima
-        peak_indices = []
-        for i in range(start_idx + 1, len(magnitude) - 1):
-            if magnitude[i] > magnitude[i-1] and magnitude[i] > magnitude[i+1]:
-                peak_indices.append((i, magnitude[i]))  # Store index and value
-        
-        # Sort by magnitude (descending)
-        peak_indices.sort(key=lambda x: x[1], reverse=True)
-        
-        # Extract just the indices of top peaks
-        top_peaks = [idx for idx, _ in peak_indices[:num_peaks]]
-        
-        return top_peaks
+            # If min_height not specified, use a percentage of max magnitude
+            if min_height is None:
+                min_height = np.max(magnitude[start_idx:]) * 0.1  # 10% of max
+            
+            # Find peaks
+            peaks = []
+            for i in range(start_idx + 1, len(magnitude) - 1):
+                if (magnitude[i] > magnitude[i-1] and 
+                    magnitude[i] > magnitude[i+1] and 
+                    magnitude[i] > min_height):
+                    peaks.append((i, magnitude[i]))
+            
+            # Sort peaks by magnitude
+            peaks.sort(key=lambda x: x[1], reverse=True)
+            
+            # Return indices of top peaks
+            return [idx for idx, _ in peaks[:num_peaks]]
+            
+        except Exception as e:
+            print(f"Error in find_peaks: {str(e)}")
+            return []
 
     def zoom_in(self):
         """Zoom in by scaling the view."""
