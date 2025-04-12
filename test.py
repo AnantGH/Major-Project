@@ -1539,26 +1539,37 @@ class OscilloscopeApp(QMainWindow):
             if len(magnitude) <= start_idx:
                 return []
             
-            # If min_height not specified, use a percentage of max magnitude
-            if min_height is None:
-                min_height = np.max(magnitude[start_idx:]) * 0.1  # 10% of max
+            # Create array from start_idx to end
+            working_magnitude = magnitude[start_idx:]
             
-            # Find peaks
-            peaks = []
-            for i in range(start_idx + 1, len(magnitude) - 1):
-                if (magnitude[i] > magnitude[i-1] and 
-                    magnitude[i] > magnitude[i+1] and 
-                    magnitude[i] > min_height):
-                    peaks.append((i, magnitude[i]))
+            # Calculate min_height based on signal characteristics
+            if min_height is None:
+                min_height = np.max(working_magnitude) * 0.05  # 5% of max
+            
+            # Use scipy's find_peaks function for better peak detection
+            from scipy.signal import find_peaks as scipy_find_peaks
+            peak_indices, _ = scipy_find_peaks(
+                working_magnitude,
+                height=min_height,
+                distance=5,  # Minimum distance between peaks
+                prominence=min_height  # Minimum prominence to be considered a peak
+            )
+            
+            # Adjust indices to account for skipped start
+            peak_indices = peak_indices + start_idx
             
             # Sort peaks by magnitude
-            peaks.sort(key=lambda x: x[1], reverse=True)
+            peak_magnitudes = magnitude[peak_indices]
+            sorted_indices = np.argsort(peak_magnitudes)[::-1]  # Sort in descending order
+            peak_indices = peak_indices[sorted_indices]
             
-            # Return indices of top peaks
-            return [idx for idx, _ in peaks[:num_peaks]]
+            # Return top peaks
+            return peak_indices[:num_peaks].tolist()
             
         except Exception as e:
             print(f"Error in find_peaks: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def zoom_in(self):
