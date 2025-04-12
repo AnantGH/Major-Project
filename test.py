@@ -158,13 +158,10 @@ class PlotWindow(QMainWindow):
 
         # Enable mouse interactions
         self.plot_widget.setMouseEnabled(x=True, y=True)
-        self.plot_widget.setInteractive(True)
 
         # Get the ViewBox and enable its features
         self.view_box = self.plot_widget.getViewBox()
-        self.view_box.enableAutoRange(axis='xy')
-        self.view_box.setMouseMode(self.view_box.RectMode)
-        self.view_box.setMenuEnabled(True)
+        
 
         # Configure plot appearance
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
