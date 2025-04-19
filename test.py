@@ -219,7 +219,7 @@ class PlotWindow(QMainWindow):
                     # Get raw values for both X and Y
                     y_values = np.array(data_buffer[i], dtype=np.float32)  # Get raw values
                     num_points = len(y_values)  # Define num_points here
-                    x_values = np.arange(num_points, dtype=np.float32)  # Get raw values
+                    
 
                     # Apply scaling in the same pattern for both
                     # Y-values scaling
@@ -228,10 +228,9 @@ class PlotWindow(QMainWindow):
                     y_values = y_values + channel_positions[i]  # Add position offset
 
                     # X-values scaling (matching Y pattern)
-                    x_values = x_values / num_points  # Normalize
-                    x_values = x_values * 8 - 4  # Convert to divisions
-                    x_values = x_values * time_div  # Scale by time/div
-                    x_values = x_values + horizontal_position * time_div  # Add position offset
+                    # New X-values scaling using a direct linear mapping:
+                    x_values = np.linspace(-4 * time_div, 4 * time_div, num_points)
+                    x_values = x_values + horizontal_position * time_div  # Add horizontal offset
 
                     # Update the trace
                     trace.setData(x_values, y_values)
