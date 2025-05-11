@@ -1,0 +1,90 @@
+class SerialReader(QThread):
+    data_received = pyqtSignal(list)
+
+    def __init__(self, port, baudrate, channels=4, impedance=1e6):
+        super().__init__()
+        self.channels = channels
+        self.running = False
+        self.port = port
+        self.baudrate = baudrate
+        self.impedance = impedance
+        self.coupling_modes = ['DC'] * channels
+        self.signal_buffers = [[] for _ in range(channels)]
+        
+        try:
+            print(f"Connecting to {port} at {baudrate} baud...")
+            self.ser = serial.Serial(port, baudrate)
+            print("Connected successfully")
+        except Exception as e:
+            print(f"Connection failed: {e}")
+            self.ser = None
+
+    def run(self):
+        if not self.ser:
+            return
+            
+        print("Starting data acquisition...")
+        self.running = True
+        
+        try:
+            while self.running:
+                if self.ser.in_waiting > 0:
+                    try:
+                        # Read one sample from serial
+                        line = self.ser.readline().decode().strip()
+                        values = [float(val) for val in line.split(',')]
+                        
+                        # Process each channel
+                        data_batch = []
+                        for channel, value in enumerate(values[:self.channels]):
+                            # Apply coupling
+                            if self.coupling_modes[channel] == 'AC':
+                                self.signal_buffers[channel].append(value)
+                                if len(self.signal_buffers[channel]) > 100:
+                                    self.signal_buffers[channel].pop(0)
+                                dc_offset = np.mean(self.signal_buffers[channel])
+                                processed_value = value - dc_offset
+                            elif self.coupling_modes[channel] == 'GND':
+                                processed_value = 0
+                            else:  # DC coupling
+                                processed_value = value
+                            
+                            data_batch.append(processed_value)
+                        
+                        # Emit the processed values
+                        self.data_received.emit(data_batch)
+                        
+                    except Exception as e:
+                        print(f"Error processing sample: {e}")
+                        
+        except Exception as e:
+            print(f"Acquisition error: {e}")
+        finally:
+            self.running = False
+            if self.ser and self.ser.is_open:
+                self.ser.close()
+
+    def stop(self):
+        self.running = False
+        if self.ser:
+            self.ser.close()
+        self.quit()
+        self.wait()
+
+    def set_ch1_amplitude(self, amplitude):
+        """Send amplitude command to hardware"""
+        if self.ser and self.ser.is_open:
+            try:
+                command = f"CH1AMP,{amplitude:.1f}\n"
+                self.ser.write(command.encode('utf-8'))
+                print(f"Set CH1 amplitude to {amplitude}V")
+            except serial.SerialException as e:
+                print(f"Error setting CH1 amplitude: {e}")
+
+
+
+#Hardware Port Detection
+    def populate_com_ports(self):
+        ports = [port.device for port in serial.tools.list_ports.comports()]
+        self.com_port_selector.clear()
+        self.com_port_selector.addItems(ports if ports else ["No Ports Found"])
